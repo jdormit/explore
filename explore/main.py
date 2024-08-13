@@ -85,7 +85,7 @@ def query_codebase(collection, question):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: explorer <directory>")
+        print(f"Usage: {sys.argv[0]} <directory>")
         sys.exit(1)
 
     directory = sys.argv[1]
