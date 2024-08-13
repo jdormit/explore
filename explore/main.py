@@ -1,30 +1,40 @@
 import os
-import sys
-from openai import OpenAI
-import chromadb
 import logging
+
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "ERROR").upper())
+
+import chromadb
+import hashlib
+import sys
 import textwrap
 
+from fnmatch import fnmatch
+from openai import OpenAI
+
 FILE_MAX_LEN = 10000
+IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
 
 logger = logging.getLogger()
 
-# Suppress logging
-loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
-for logger in loggers:
-    logger.setLevel(logging.ERROR)
-# and disable huggingface tokenizers parallelism, it was giving a warning
+# disable huggingface tokenizers parallelism, it was giving a warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Initialize OpenAI API
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Initialize Chroma client with the updated path
 db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
 client = chromadb.PersistentClient(path=db_path)
 
 messages = []
+
+
+def hash_file(file_path):
+    """Compute the hash of a file."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(8192):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def index_directory(directory):
@@ -33,15 +43,21 @@ def index_directory(directory):
     for root, _, files in os.walk(directory):
         for file in files:
             file_path = os.path.join(root, file)
+            if any(fnmatch(file_path, pattern) for pattern in IGNORED_PATTERNS):
+                continue
+            file_hash = hash_file(file_path)
+            get_res = collection.get(where={"hash": file_hash}, include=[], limit=1)
+            if len(get_res["ids"]) > 0:
+                continue
             with open(file_path, "r") as f:
                 try:
                     print(".", end="", flush=True)
-                    content = f.read()
+                    content = f"{file_path}:\n\n{f.read()}"
                     document_id = file_path.replace(directory, "")
-                    collection.add(
+                    collection.upsert(
                         documents=[content],
                         ids=[document_id],
-                        metadatas=[{"path": file_path}],
+                        metadatas=[{"path": file_path, "hash": file_hash}],
                     )
                 except UnicodeDecodeError:
                     logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
@@ -54,11 +70,12 @@ def query_codebase(collection, question):
         query_texts=[question],
         n_results=5,
     )
+    logger.debug(
+        f"Using documents: {[meta['path'] for meta in results['metadatas'][0]]}"
+    )
+
     context_documents = "\n\n".join(
-        [
-            f"{doc[0]['path']}:\n{textwrap.shorten(doc[1], width=FILE_MAX_LEN)}"
-            for doc in zip(results["metadatas"][0], results["documents"][0])
-        ]
+        [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in results["documents"][0]]
     )
 
     messages.append({"role": "user", "content": question})
