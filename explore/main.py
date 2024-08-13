@@ -127,6 +127,4 @@ if __name__ == "__main__":
     main()
 
 # TODO:
-# - only re-index changed files (by calculating a hash of the file contents and saving it as metadata)
 # - integrate with Emacs
-# - disable warnings/logging from chromadb
