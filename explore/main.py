@@ -17,14 +17,15 @@ for logger in loggers:
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Initialize OpenAI API
-openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize Chroma client with the updated path
-db_path = os.path.join(os.getenv('HOME'), '.explore', 'db')
+db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
 client = chromadb.PersistentClient(path=db_path)
 
 messages = []
+
 
 def index_directory(directory):
     collection_name = os.path.basename(os.path.normpath(directory))
@@ -32,7 +33,7 @@ def index_directory(directory):
     for root, _, files in os.walk(directory):
         for file in files:
             file_path = os.path.join(root, file)
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 try:
                     print(".", end="", flush=True)
                     content = f.read()
@@ -40,11 +41,12 @@ def index_directory(directory):
                     collection.add(
                         documents=[content],
                         ids=[document_id],
-                        metadatas=[{"path": file_path}]
+                        metadatas=[{"path": file_path}],
                     )
                 except UnicodeDecodeError:
                     logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
     return collection
+
 
 def query_codebase(collection, question):
     # Step 1: Retrieve relevant documents
@@ -52,7 +54,12 @@ def query_codebase(collection, question):
         query_texts=[question],
         n_results=5,
     )
-    context_documents = "\n\n".join([f"{doc[0]['path']}:\n{textwrap.shorten(doc[1], width=FILE_MAX_LEN)}" for doc in zip(results['metadatas'][0], results['documents'][0])])
+    context_documents = "\n\n".join(
+        [
+            f"{doc[0]['path']}:\n{textwrap.shorten(doc[1], width=FILE_MAX_LEN)}"
+            for doc in zip(results["metadatas"][0], results["documents"][0])
+        ]
+    )
 
     messages.append({"role": "user", "content": question})
     response_text = ""
@@ -61,9 +68,11 @@ def query_codebase(collection, question):
         messages=[
             {
                 "role": "system",
-                "content": f"You are an expert in understanding and explaining code. You will be asked a question about this codebase, respond concisely.\n\nRelevant source files: {context_documents}"}
-        ] + messages,
-        stream=True
+                "content": f"You are an expert in understanding and explaining code. You will be asked a question about this codebase, respond concisely.\n\nRelevant source files: {context_documents}",
+            }
+        ]
+        + messages,
+        stream=True,
     )
 
     for chunk in response:
@@ -72,6 +81,7 @@ def query_codebase(collection, question):
             response_text += text
             yield text
     messages.append({"role": "assistant", "content": response_text})
+
 
 def main():
     if len(sys.argv) < 2:
@@ -86,13 +96,14 @@ def main():
 
     while True:
         question = input("Ask a question about the codebase (or type 'exit' to quit): ")
-        if question.lower() == 'exit':
+        if question.lower() == "exit":
             break
 
         print("\n", flush=True)
         for part in query_codebase(collection, question):
             print(part, end="", flush=True)
         print()  # For a new line after the full response
+
 
 if __name__ == "__main__":
     main()
