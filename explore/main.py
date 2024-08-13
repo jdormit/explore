@@ -2,6 +2,19 @@ import os
 import sys
 from openai import OpenAI
 import chromadb
+import logging
+import textwrap
+
+FILE_MAX_LEN = 10000
+
+logger = logging.getLogger()
+
+# Suppress logging
+loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
+for logger in loggers:
+    logger.setLevel(logging.ERROR)
+# and disable huggingface tokenizers parallelism, it was giving a warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Initialize OpenAI API
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -11,6 +24,8 @@ db_path = os.path.join(os.getenv('HOME'), '.explore', 'db')
 os.makedirs(db_path, exist_ok=True)
 client = chromadb.PersistentClient(path=db_path)
 
+messages = []
+
 def index_directory(directory):
     collection_name = os.path.basename(os.path.normpath(directory))
     collection = client.get_or_create_collection(name=collection_name)
@@ -19,6 +34,7 @@ def index_directory(directory):
             file_path = os.path.join(root, file)
             with open(file_path, 'r') as f:
                 try:
+                    print(".", end="", flush=True)
                     content = f.read()
                     document_id = file_path.replace(directory, "")
                     collection.add(
@@ -27,7 +43,7 @@ def index_directory(directory):
                         metadatas=[{"path": file_path}]
                     )
                 except UnicodeDecodeError:
-                    print(f"Invalid UTF-8: {file_path}. Skipping")
+                    logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
     return collection
 
 def query_codebase(collection, question):
@@ -36,24 +52,26 @@ def query_codebase(collection, question):
         query_texts=[question],
         n_results=5,
     )
-    context_documents = results['documents'][0]
+    context_documents = "\n\n".join([f"{doc[0]['path']}:\n{textwrap.shorten(doc[1], width=FILE_MAX_LEN)}" for doc in zip(results['metadatas'][0], results['documents'][0])])
 
-    # Step 2: Combine context with the question for the LLM
-    combined_input = "\n\n".join(context_documents) + "\n\nQuestion: " + question
-
-    # Step 3: Send the combined input to the OpenAI Chat API with streaming
+    messages.append({"role": "user", "content": question})
+    response_text = ""
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are an expert in understanding and explaining code."},
-            {"role": "user", "content": combined_input}
-        ],
+            {
+                "role": "system",
+                "content": f"You are an expert in understanding and explaining code. You will be asked a question about this codebase, respond concisely.\n\nRelevant source files: {context_documents}"}
+        ] + messages,
         stream=True
     )
 
     for chunk in response:
         if len(chunk.choices) > 0:
-            yield (chunk.choices[0].delta.content or "")
+            text = chunk.choices[0].delta.content or ""
+            response_text += text
+            yield text
+    messages.append({"role": "assistant", "content": response_text})
 
 def main():
     if len(sys.argv) < 2:
@@ -61,7 +79,9 @@ def main():
         sys.exit(1)
 
     directory = sys.argv[1]
+    print("Indexing directory...")
     collection = index_directory(directory)
+    print("")
     print("Directory indexed.")
 
     while True:
@@ -69,7 +89,7 @@ def main():
         if question.lower() == 'exit':
             break
 
-        print("Answer:", end=" ", flush=True)
+        print("\n", flush=True)
         for part in query_codebase(collection, question):
             print(part, end="", flush=True)
         print()  # For a new line after the full response
@@ -79,6 +99,5 @@ if __name__ == "__main__":
 
 # TODO:
 # - only re-index changed files (by calculating a hash of the file contents and saving it as metadata)
-# - save conversational history back into the prompt
 # - integrate with Emacs
 # - disable warnings/logging from chromadb
