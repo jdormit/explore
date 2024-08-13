@@ -13,6 +13,7 @@ from openai import OpenAI
 
 FILE_MAX_LEN = 10000
 IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 logger = logging.getLogger()
 
@@ -81,7 +82,7 @@ def query_codebase(collection, question):
     messages.append({"role": "user", "content": question})
     response_text = ""
     response = openai_client.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {
                 "role": "system",
