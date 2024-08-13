@@ -5,6 +5,7 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "ERROR").upper())
 
 import chromadb
 import hashlib
+import gnureadline as readline
 import sys
 import textwrap
 
@@ -14,6 +15,7 @@ from openai import OpenAI
 FILE_MAX_LEN = 10000
 IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+HISTORY_FILE = os.path.join(os.getenv("HOME"), ".explore", "history")
 
 logger = logging.getLogger()
 
@@ -112,15 +114,30 @@ def main():
     print("")
     print("Directory indexed.")
 
-    while True:
-        question = input("Ask a question about the codebase (or type 'exit' to quit): ")
-        if question.lower() == "exit":
-            break
+    # Readline configuration for history
+    if not os.path.exists(HISTORY_FILE):
+        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+        with open(HISTORY_FILE, "wb") as f:
+            pass  # create the file
 
-        print("\n", flush=True)
-        for part in query_codebase(collection, question):
-            print(part, end="", flush=True)
-        print()  # For a new line after the full response
+    readline.read_history_file(HISTORY_FILE)
+
+    try:
+        while True:
+            question = input(
+                "Ask a question about the codebase (or type 'exit' to quit): "
+            )
+            if question.lower() == "exit":
+                break
+
+            print("\n", flush=True)
+            for part in query_codebase(collection, question):
+                print(part, end="", flush=True)
+            print()  # For a new line after the full response
+
+            readline.write_history_file(HISTORY_FILE)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
