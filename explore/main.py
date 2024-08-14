@@ -49,7 +49,16 @@ def index_directory(directory):
 
     total_files = 0
     for root, _, files in os.walk(directory):
-        total_files += len([file for file in files if not any(fnmatch(os.path.join(root, file), pattern) for pattern in IGNORED_PATTERNS)])
+        total_files += len(
+            [
+                file
+                for file in files
+                if not any(
+                    fnmatch(os.path.join(root, file), pattern)
+                    for pattern in IGNORED_PATTERNS
+                )
+            ]
+        )
 
     progress_bar = tqdm(total=total_files, desc="Indexing files", unit="file")
 
