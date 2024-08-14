@@ -11,6 +11,7 @@ openai = "^1.40.6"
 chromadb = "^0.5.5"
 gnureadline = "^8.2.10"
 tqdm = "^4.66.5"
+pathspec = "^0.12.1"
 
 
 [build-system]
