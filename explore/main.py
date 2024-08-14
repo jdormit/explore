@@ -11,6 +11,7 @@ import textwrap
 
 from fnmatch import fnmatch
 from openai import OpenAI
+from tqdm import tqdm
 
 FILE_MAX_LEN = 10000
 IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
@@ -43,6 +44,13 @@ def hash_file(file_path):
 def index_directory(directory):
     collection_name = os.path.basename(os.path.normpath(directory))
     collection = client.get_or_create_collection(name=collection_name)
+
+    total_files = 0
+    for root, _, files in os.walk(directory):
+        total_files += len([file for file in files if not any(fnmatch(os.path.join(root, file), pattern) for pattern in IGNORED_PATTERNS)])
+
+    progress_bar = tqdm(total=total_files, desc="Indexing files", unit="file")
+
     for root, _, files in os.walk(directory):
         for file in files:
             file_path = os.path.join(root, file)
@@ -51,10 +59,10 @@ def index_directory(directory):
             file_hash = hash_file(file_path)
             get_res = collection.get(where={"hash": file_hash}, include=[], limit=1)
             if len(get_res["ids"]) > 0:
+                progress_bar.update(1)
                 continue
             with open(file_path, "r") as f:
                 try:
-                    print(".", end="", flush=True)
                     content = f"{file_path}:\n\n{f.read()}"
                     document_id = file_path.replace(directory, "")
                     collection.upsert(
@@ -64,6 +72,8 @@ def index_directory(directory):
                     )
                 except UnicodeDecodeError:
                     logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
+            progress_bar.update(1)
+    progress_bar.close()
     return collection
 
 
@@ -109,20 +119,13 @@ def main():
         sys.exit(1)
 
     directory = sys.argv[1]
-    print("Indexing directory...")
-    collection = index_directory(directory)
-    print("")
-    print("Directory indexed.")
-
-    # Readline configuration for history
-    if not os.path.exists(HISTORY_FILE):
-        os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-        with open(HISTORY_FILE, "wb") as f:
-            pass  # create the file
-
-    readline.read_history_file(HISTORY_FILE)
-
     try:
+        collection = index_directory(directory)
+        if not os.path.exists(HISTORY_FILE):
+            os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
+            with open(HISTORY_FILE, "wb") as f:
+                pass  # create the file
+        readline.read_history_file(HISTORY_FILE)
         while True:
             question = input(
                 "Ask a question about the codebase (or type 'exit' to quit): "
@@ -130,11 +133,10 @@ def main():
             if question.lower() == "exit":
                 break
 
-            print("\n", flush=True)
+            print("", flush=True)
             for part in query_codebase(collection, question):
                 print(part, end="", flush=True)
             print()  # For a new line after the full response
-
             readline.write_history_file(HISTORY_FILE)
     except KeyboardInterrupt:
         pass
