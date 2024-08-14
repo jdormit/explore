@@ -16,6 +16,7 @@ from tqdm import tqdm
 FILE_MAX_LEN = 10000
 IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
 HISTORY_FILE = os.path.join(os.getenv("HOME"), ".explore", "history")
 
 logger = logging.getLogger()
@@ -23,7 +24,7 @@ logger = logging.getLogger()
 # disable huggingface tokenizers parallelism, it was giving a warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE_URL)
 
 db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
