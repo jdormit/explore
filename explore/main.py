@@ -35,7 +35,7 @@ logger = logging.getLogger()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE_URL)
-
+chromadb_n_results = int(os.getenv("CHROMADB_N_RESULTS", 5))
 db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
 client = chromadb.PersistentClient(
@@ -103,7 +103,7 @@ def query_codebase(collection, question):
     # Step 1: Retrieve relevant documents
     results = collection.query(
         query_texts=[question],
-        n_results=5,
+        n_results=chromadb_n_results,
     )
     logger.debug(
         f"Using documents: {[meta['path'] for meta in results['metadatas'][0]]}"
