@@ -15,7 +15,14 @@ from openai import OpenAI
 from tqdm import tqdm
 
 FILE_MAX_LEN = 10000
-IGNORED_PATTERNS = ["**/.git/*", "*.tmp", "*.log", "*.swp", "*.bak"]
+IGNORED_PATTERNS = [
+    "**/.git/*",
+    "*.tmp",
+    "*.log",
+    "*.swp",
+    "*.bak",
+    "**/node_modules/*",
+]
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
 HISTORY_FILE = os.path.join(os.getenv("HOME"), ".explore", "history")
