@@ -100,17 +100,34 @@ def index_directory(directory):
 
 
 def query_codebase(collection, question):
-    # Step 1: Retrieve relevant documents
-    results = collection.query(
+    initial_results = collection.query(
         query_texts=[question],
         n_results=chromadb_n_results,
     )
-    logger.debug(
-        f"Using documents: {[meta['path'] for meta in results['metadatas'][0]]}"
+    initial_documents = initial_results["documents"][0]
+    fetched_ids = [meta["path"] for meta in initial_results["metadatas"][0]]
+
+    logger.debug(f"Query documents: {fetched_ids}")
+
+    conversation_history = " ".join(msg["content"] for msg in messages)
+    additional_results = collection.query(
+        query_texts=[conversation_history],
+        n_results=3,
+        where={"path": {"$nin": fetched_ids}},
     )
 
+    additional_documents = additional_results["documents"][0]
+    additional_fetched_ids = {
+        meta["path"] for meta in additional_results["metadatas"][0]
+    }
+
+    logger.debug(f"Context documents: {additional_fetched_ids}")
+
     context_documents = "\n\n".join(
-        [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in results["documents"][0]]
+        [
+            textwrap.shorten(doc, width=FILE_MAX_LEN)
+            for doc in initial_documents + additional_documents
+        ]
     )
 
     messages.append({"role": "user", "content": question})
