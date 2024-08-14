@@ -3,6 +3,7 @@ import logging
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "ERROR").upper())
 
+import argparse
 import chromadb
 import hashlib
 import gnureadline as readline
@@ -115,13 +116,32 @@ def query_codebase(collection, question):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <directory>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Interactively explore a codebase with an LLM."
+    )
+    parser.add_argument("directory", help="The directory to index and explore.")
+    parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        help="skip indexing the directory (warning: if the directory hasn't been indexed at least once, it will be indexed anyway)",
+    )
+    args = parser.parse_args()
 
-    directory = sys.argv[1]
+    directory = args.directory
+
     try:
-        collection = index_directory(directory)
+        if args.skip_index:
+            collection_name = os.path.basename(os.path.normpath(directory))
+            try:
+                collection = client.get_collection(name=collection_name)
+            except ValueError:
+                print(
+                    f"Warning: No existing collection for {directory}. Indexing is required."
+                )
+                collection = index_directory(directory)
+        else:
+            collection = index_directory(directory)
+
         if not os.path.exists(HISTORY_FILE):
             os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
             with open(HISTORY_FILE, "wb") as f:
