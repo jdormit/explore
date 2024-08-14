@@ -45,15 +45,6 @@ client = chromadb.PersistentClient(
 messages = []
 
 
-def hash_file(file_path):
-    """Compute the hash of a file."""
-    hasher = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(8192):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
 def index_directory(directory):
     collection_name = os.path.basename(os.path.normpath(directory))
     collection = client.get_or_create_collection(name=collection_name)
@@ -78,19 +69,22 @@ def index_directory(directory):
             file_path = os.path.join(root, file)
             if any(fnmatch(file_path, pattern) for pattern in IGNORED_PATTERNS):
                 continue
-            file_hash = hash_file(file_path)
-            get_res = collection.get(where={"hash": file_hash}, include=[], limit=1)
-            if len(get_res["ids"]) > 0:
+            doc_id = hashlib.md5(file_path.encode("utf-8")).hexdigest()
+            modified_time = os.path.getmtime(file_path)
+            get_res = collection.get(ids=[doc_id], include=["metadatas"], limit=1)
+            if (
+                len(get_res["ids"]) > 0
+                and get_res["metadatas"][0].get("modified_time", -1.0) == modified_time
+            ):
                 progress_bar.update(1)
                 continue
             with open(file_path, "r") as f:
                 try:
                     content = f"{file_path}:\n\n{f.read()}"
-                    document_id = file_path.replace(directory, "")
                     collection.upsert(
                         documents=[content],
-                        ids=[document_id],
-                        metadatas=[{"path": file_path, "hash": file_hash}],
+                        ids=[doc_id],
+                        metadatas=[{"path": file_path, "modified_time": modified_time}],
                     )
                 except UnicodeDecodeError:
                     logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
