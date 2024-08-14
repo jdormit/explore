@@ -10,6 +10,7 @@ import gnureadline as readline
 import sys
 import textwrap
 
+from chromadb.config import Settings
 from fnmatch import fnmatch
 from openai import OpenAI
 from tqdm import tqdm
@@ -36,7 +37,9 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE
 
 db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
-client = chromadb.PersistentClient(path=db_path)
+client = chromadb.PersistentClient(
+    path=db_path, settings=Settings(anonymized_telemetry=False)
+)
 
 messages = []
 
