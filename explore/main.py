@@ -99,7 +99,7 @@ def query_codebase(collection, question):
         messages=[
             {
                 "role": "system",
-                "content": f"You are an expert in understanding and explaining code. You will be asked a question about this codebase, respond concisely.\n\nRelevant source files: {context_documents}",
+                "content": f"You are an expert in understanding and explaining code. You will be asked a question about a codebase, respond concisely.\n\nRelevant source files: {context_documents}",
             }
         ]
         + messages,
