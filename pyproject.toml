@@ -1,9 +1,12 @@
 [tool.poetry]
 name = "explore"
 version = "0.1.0"
-description = ""
-authors = ["Jeremy Dormitzer <jeremydormitzer@hummingbird.co>"]
+description = "Interactively explore a codebase with an LLM"
+authors = ["Jeremy Dormitzer <jeremy.dormitzer@gmail.com>"]
 readme = "README.md"
+
+[tool.poetry.scripts]
+explore = "explore.main:main"
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -12,6 +15,7 @@ chromadb = "^0.5.5"
 gnureadline = "^8.2.10"
 tqdm = "^4.66.5"
 pathspec = "^0.12.1"
+sentence-transformers = "^3.0.1"
 
 
 [build-system]
