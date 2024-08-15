@@ -10,6 +10,7 @@
 
 ``` sh
 pipx install explore-cli
+export OPENAI_API_KEY=<your OpenAI API key>
 explore <directory>
 ```
 
@@ -18,6 +19,7 @@ Alternatively, you can clone this repository and run the script with [`poetry`](
 ``` sh
 poetry install
 poetry build
+export OPENAI_API_KEY=<your OpenAI API key>
 poetry run explore <directory>
 ```
 
@@ -48,6 +50,7 @@ options:
 There are a couple of environment variables you can set to configure `explore`:
 | Name  | Description  |
 |---|---|
+| `OPENAI_API_KEY` | Required. Your API key for the OpenAI API |
 | `OPENAI_BASE_URL`  | The base URL used for OpenAI API requests. You can set this to use any OpenAI-compatible APIs (e.g. [Ollama](https://ollama.com/blog/openai-compatibility) to run models locally). Default: `https://api.openai.com/v1` |
 | `OPENAI_MODEL`  |  Which model to tell the OpenAI API to use. The default is `gpt-4o-mini`, which strikes a good balance between coherence and price. You can get better results if you set this to `gpt-4o`, but bear in mind `explore` can generate extremely long prompts so that could get expensive quickly |
 
