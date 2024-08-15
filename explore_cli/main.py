@@ -61,7 +61,7 @@ messages = []
 
 
 def collection_name(directory):
-    return os.path.abspath(os.path.expanduser(directory)).replace("/", "_").strip("_")
+    return directory.replace("/", "_").strip("_")
 
 
 def extract_keywords(text):
@@ -250,7 +250,7 @@ def main():
     )
     args = parser.parse_args()
 
-    directory = args.directory
+    directory = os.path.abspath(os.path.expanduser(args.directory))
     ignore_gitignore = not args.no_ignore
     documents_only = args.documents_only
     initial_question = args.question
