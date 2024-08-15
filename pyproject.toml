@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "explore-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Interactively explore a codebase with an LLM"
 authors = ["Jeremy Dormitzer <jeremy.dormitzer@gmail.com>"]
 readme = "README.md"
