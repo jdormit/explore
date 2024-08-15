@@ -9,7 +9,7 @@
 `explore` is available [on PyPI](). I recommend installing it with [`pipx`](https://github.com/pypa/pipx):
 
 ``` sh
-pipx install explore
+pipx install explore-cli
 explore <directory>
 ```
 

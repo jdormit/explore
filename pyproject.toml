@@ -1,12 +1,12 @@
 [tool.poetry]
-name = "explore"
+name = "explore-cli"
 version = "0.1.0"
 description = "Interactively explore a codebase with an LLM"
 authors = ["Jeremy Dormitzer <jeremy.dormitzer@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.scripts]
-explore = "explore.main:main"
+explore = "explore_cli.main:main"
 
 [tool.poetry.dependencies]
 python = "^3.12"
