@@ -14,6 +14,8 @@ from collections import Counter
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from fnmatch import fnmatch
+from keybert.llm import OpenAI as KeyBERTOpenAI
+from keybert import KeyLLM
 from openai import OpenAI
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
@@ -41,6 +43,10 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE_URL)
 
+kw_extractor = KeyLLM(
+    KeyBERTOpenAI(model="gpt-4o-mini", client=openai_client, chat=True)
+)
+
 chromadb_n_results = int(os.getenv("CHROMADB_N_RESULTS", 4))
 db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
 os.makedirs(db_path, exist_ok=True)
@@ -54,13 +60,12 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 messages = []
 
 
+def collection_name(directory):
+    return os.path.abspath(os.path.expanduser(directory)).replace("/", "_").strip("_")
+
+
 def extract_keywords(text):
-    query = text.strip("?")
-    tokens = re.findall(r"\w+", query)
-    filtered_tokens = [
-        t for t in tokens if t not in ["the", "is", "in", "and", "to", "a", "an", "of"]
-    ]
-    keywords = {k[0] for k in Counter(filtered_tokens).most_common()}
+    keywords = set(kw_extractor.extract_keywords(text)[0])
     keywords = keywords.union({k.lower() for k in keywords})
     return list(keywords)
 
@@ -74,14 +79,16 @@ def load_gitignore(directory):
 
 
 def index_directory(directory, ignore_gitignore=True, disable_progress_bar=False):
-    collection_name = os.path.basename(os.path.normpath(directory))
+    name = collection_name(directory)
     collection = client.get_or_create_collection(
-        name=collection_name, embedding_function=embedding_function
+        name=name, embedding_function=embedding_function
     )
 
     pathspec = load_gitignore(directory) if ignore_gitignore else None
 
-    count_progress = tqdm(desc="Collecting files", unit=" files", disable=disable_progress_bar)
+    count_progress = tqdm(
+        desc="Collecting files", unit=" files", disable=disable_progress_bar
+    )
     files = []
     for root, _, dir_files in os.walk(directory):
         for file in dir_files:
@@ -98,7 +105,11 @@ def index_directory(directory, ignore_gitignore=True, disable_progress_bar=False
     count_progress.close()
 
     progress_bar = tqdm(
-        total=len(files), desc="Indexing files", unit=" files", miniters=1, disable=disable_progress_bar
+        total=len(files),
+        desc="Indexing files",
+        unit=" files",
+        miniters=1,
+        disable=disable_progress_bar,
     )
 
     for file_path in files:
@@ -128,41 +139,62 @@ def index_directory(directory, ignore_gitignore=True, disable_progress_bar=False
 
 
 def retrieve_documents(collection, question):
+    docs = {}
+
     initial_results = collection.query(
         query_texts=[question],
         n_results=chromadb_n_results,
     )
-    initial_documents = initial_results["documents"][0]
-    fetched_ids = [meta["path"] for meta in initial_results["metadatas"][0]]
-    logger.debug(f"Query documents: {fetched_ids}")
+    for doc, meta in zip(
+        initial_results["documents"][0], initial_results["metadatas"][0]
+    ):
+        docs[meta["path"]] = doc
+
+    logger.debug(
+        f"Query documents: {[meta['path'] for meta in initial_results['metadatas'][0]]}"
+    )
 
     conversation_history = " ".join(msg["content"] for msg in messages)
     additional_results = collection.query(
         query_texts=[conversation_history],
         n_results=3,
-        where={"path": {"$nin": fetched_ids}},
     )
 
-    additional_documents = additional_results["documents"][0]
-    additional_fetched_ids = [
-        meta["path"] for meta in additional_results["metadatas"][0]
-    ]
-    logger.debug(f"Context documents: {additional_fetched_ids}")
+    for doc, meta in zip(
+        additional_results["documents"][0], additional_results["metadatas"][0]
+    ):
+        if meta["path"] not in docs:
+            docs[meta["path"]] = doc
 
+    logger.debug(
+        f"Context documents: {[meta['path'] for meta in additional_results['metadatas'][0]]}"
+    )
     search_keywords = extract_keywords(question)
-    keyword_results = collection.get(
-        limit=2,
-        where_document={"$or": [{"$contains": keyword} for keyword in search_keywords]},
-        where={"path": {"$nin": fetched_ids + additional_fetched_ids}},
-    )
-    keyword_documents = keyword_results["documents"]
-    keyword_fetched_ids = [meta["path"] for meta in keyword_results["metadatas"]]
-    logger.debug(f"Keyword documents: {keyword_fetched_ids}")
+    logger.debug(f"Keywords: {search_keywords}")
+    if search_keywords and len(search_keywords) > 0:
+        if len(search_keywords) > 1:
+            where_document = {
+                "$or": [{"$contains": keyword} for keyword in search_keywords]
+            }
+        else:
+            where_document = {"$contains": search_keywords[0]}
+        keyword_results = collection.get(
+            limit=4,
+            where_document=where_document,
+        )
+        for doc, meta in zip(
+            keyword_results["documents"], keyword_results["metadatas"]
+        ):
+            if meta["path"] not in docs:
+                docs[meta["path"]] = doc
+        logger.debug(
+            f"Keyword documents: {[meta['path'] for meta in keyword_results['metadatas']]}"
+        )
 
-    return initial_documents + additional_documents + keyword_documents
+    return docs.values()
 
 
-def query_codebase(collection, question, documents):
+def query_codebase(question, documents):
     context_documents = "\n\n".join(
         [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in documents]
     )
@@ -210,8 +242,12 @@ def main():
     parser.add_argument(
         "--question", help="Initial question to ask (will prompt if not provided)"
     )
-    parser.add_argument("--no-progress-bar", help="Disable progress bar", action="store_true")
-    parser.add_argument("--index-only", help="Only index the directory", action="store_true")
+    parser.add_argument(
+        "--no-progress-bar", help="Disable progress bar", action="store_true"
+    )
+    parser.add_argument(
+        "--index-only", help="Only index the directory", action="store_true"
+    )
     args = parser.parse_args()
 
     directory = args.directory
@@ -226,16 +262,20 @@ def main():
 
     try:
         if args.skip_index:
-            collection_name = os.path.basename(os.path.normpath(directory))
+            name = collection_name(directory)
             try:
-                collection = client.get_collection(name=collection_name)
+                collection = client.get_collection(name=name)
             except ValueError:
                 print(
                     f"Warning: No existing collection for {directory}. Indexing is required."
                 )
-                collection = index_directory(directory, ignore_gitignore, disable_progress_bar=no_progress_bar)
+                collection = index_directory(
+                    directory, ignore_gitignore, disable_progress_bar=no_progress_bar
+                )
         else:
-            collection = index_directory(directory, ignore_gitignore, disable_progress_bar=no_progress_bar)
+            collection = index_directory(
+                directory, ignore_gitignore, disable_progress_bar=no_progress_bar
+            )
 
         if index_only:
             return
@@ -263,7 +303,7 @@ def main():
                 for doc in documents:
                     print(doc)
                 break
-            for part in query_codebase(collection, question, documents):
+            for part in query_codebase(question, documents):
                 print(part, end="", flush=True)
             print()  # For a new line after the full response
             readline.write_history_file(HISTORY_FILE)

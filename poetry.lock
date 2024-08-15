@@ -906,6 +906,32 @@ files = [
 ]
 
 [[package]]
+name = "keybert"
+version = "0.8.5"
+description = "KeyBERT performs keyword extraction with state-of-the-art transformer models."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "keybert-0.8.5-py3-none-any.whl", hash = "sha256:005e0eab30c8e85c249ccc6eaad7741357e692591b3eaebe64c40f12614c2ca9"},
+    {file = "keybert-0.8.5.tar.gz", hash = "sha256:4b8e4b4d129b319b6266c77b9c8ed34e94e5db42a977c977c8ae58f57343995f"},
+]
+
+[package.dependencies]
+numpy = ">=1.18.5"
+rich = ">=10.4.0"
+scikit-learn = ">=0.22.2"
+sentence-transformers = ">=0.3.8"
+
+[package.extras]
+dev = ["keybert[docs,test]"]
+docs = ["mkdocs (>=1.1)", "mkdocs-material (>=4.6.3)", "mkdocstrings (>=0.8.0)"]
+flair = ["flair (>=0.7)", "torch (>=1.4.0)", "transformers (>=3.5.1)"]
+gensim = ["gensim (>=3.6.0)"]
+spacy = ["spacy (>=3.0.1)"]
+test = ["black (>=19.3b0)", "flake8 (>=3.6.0)", "pre-commit (>=2.2.0)", "pytest (>=5.4.3)", "pytest-cov (>=2.6.1)"]
+use = ["tensorflow", "tensorflow-hub", "tensorflow-text"]
+
+[[package]]
 name = "kubernetes"
 version = "30.1.0"
 description = "Kubernetes python client"
@@ -3334,4 +3360,4 @@ test = ["big-O", "importlib-resources", "jaraco.functools", "jaraco.itertools", 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "38f0e25fc1ba94e3481bba5cd39887b28963efc01f887b33056cecbad058363b"
+content-hash = "eb70306cec643043e2c496e63456fa8bab6c105d6eb64faadf030406f89ec1a3"
