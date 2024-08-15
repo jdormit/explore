@@ -221,6 +221,9 @@ def main():
     no_progress_bar = args.no_progress_bar
     index_only = args.index_only
 
+    if documents_only and not initial_question:
+        parser.error("--question is required when using --documents-only")
+
     try:
         if args.skip_index:
             collection_name = os.path.basename(os.path.normpath(directory))
