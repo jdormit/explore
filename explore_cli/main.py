@@ -44,7 +44,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE_URL)
 
 kw_extractor = KeyLLM(
-    KeyBERTOpenAI(model="gpt-4o-mini", client=openai_client, chat=True)
+    KeyBERTOpenAI(model=OPENAI_MODEL, client=openai_client, chat=True)
 )
 
 chromadb_n_results = int(os.getenv("CHROMADB_N_RESULTS", 4))
