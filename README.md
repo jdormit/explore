@@ -61,8 +61,8 @@ There are a couple of environment variables you can set to configure `explore`:
 1. The directory is indexed into a local Chroma store. Only files that have been modified since the last time they were indexed get re-indexed, so this step will be quite slow on the first execution but pretty quick after that.
 2. Documents relevant to the query are collected in three ways:
    1. The question is embedded as a vector and used to search for the nearest matches in the Chroma DB
-   2. The entire conversation so far is embedded as a vectore and used to search for more matches in Chroma
+   2. The entire conversation so far is embedded as a vector and used to search for more matches in Chroma
    3. Search keywords are extracted from the question and used to find exact matching text in the indexed documents
    
-   By default, `explore` will fetch 4 documents using the first approach, 3 using the second and 2 using the third.
-3. The documents are all concatenated and prepended to the ongoing conversation, then the latest question is appended. The whole thing is sent to the LLM, which returns an answer to the question based on the provided documents.
+   By default, `explore` will fetch 4 documents using the first approach, 3 using the second and 4 using the third.
+3. The documents are deduplicated, concatenated and prepended to the ongoing conversation, then the latest question is appended. The whole thing is sent to the LLM, which returns an answer to the question based on the provided documents.
