@@ -7,12 +7,12 @@ import argparse
 import chromadb
 import hashlib
 import gnureadline as readline
-import re
 import textwrap
 
 from collections import Counter
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
+from dataclasses import dataclass
 from fnmatch import fnmatch
 from keybert.llm import OpenAI as KeyBERTOpenAI
 from keybert import KeyLLM
@@ -31,40 +31,40 @@ IGNORED_PATTERNS = [
     "**/node_modules/*",
     "*.sock",
 ]
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-
-HISTORY_FILE = os.path.join(os.getenv("HOME"), ".explore", "history")
-
-logger = logging.getLogger()
-
 # disable huggingface tokenizers parallelism, it was giving a warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=OPENAI_BASE_URL)
+logger = logging.getLogger()
 
-kw_extractor = KeyLLM(
-    KeyBERTOpenAI(model=OPENAI_MODEL, client=openai_client, chat=True)
-)
 
-chromadb_n_results = int(os.getenv("CHROMADB_N_RESULTS", 4))
-db_path = os.path.join(os.getenv("HOME"), ".explore", "db")
-os.makedirs(db_path, exist_ok=True)
-client = chromadb.PersistentClient(
-    path=db_path, settings=Settings(anonymized_telemetry=False)
-)
-embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-mpnet-base-v2"
-)
+@dataclass
+class Config:
+    openai_api_key: str
+    openai_base_url: str
+    openai_model: str
+    chromadb_n_results: int
+    db_path: str
+    history_file: str
+    log_level: str
 
-messages = []
+    @classmethod
+    def load(cls):
+        return cls(
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            chromadb_n_results=int(os.getenv("CHROMADB_N_RESULTS", 4)),
+            db_path=os.path.join(os.getenv("HOME"), ".explore", "db"),
+            history_file=os.path.join(os.getenv("HOME"), ".explore", "history"),
+            log_level=os.getenv("LOG_LEVEL", "ERROR"),
+        )
 
 
 def collection_name(directory):
     return directory.replace("/", "_").strip("_")
 
 
-def extract_keywords(text):
+def extract_keywords(kw_extractor, text):
     keywords = set(kw_extractor.extract_keywords(text)[0])
     keywords = keywords.union({k.lower() for k in keywords})
     return list(keywords)
@@ -78,7 +78,13 @@ def load_gitignore(directory):
     return None
 
 
-def index_directory(directory, ignore_gitignore=True, disable_progress_bar=False):
+def index_directory(
+    client,
+    embedding_function,
+    directory,
+    ignore_gitignore=True,
+    disable_progress_bar=False,
+):
     name = collection_name(directory)
     collection = client.get_or_create_collection(
         name=name, embedding_function=embedding_function
@@ -138,12 +144,12 @@ def index_directory(directory, ignore_gitignore=True, disable_progress_bar=False
     return collection
 
 
-def retrieve_documents(collection, question):
+def retrieve_documents(kw_extractor, config, messages, collection, question):
     docs = {}
 
     initial_results = collection.query(
         query_texts=[question],
-        n_results=chromadb_n_results,
+        n_results=config.chromadb_n_results,
     )
     for doc, meta in zip(
         initial_results["documents"][0], initial_results["metadatas"][0]
@@ -169,7 +175,7 @@ def retrieve_documents(collection, question):
     logger.debug(
         f"Context documents: {[meta['path'] for meta in additional_results['metadatas'][0]]}"
     )
-    search_keywords = extract_keywords(question)
+    search_keywords = extract_keywords(kw_extractor, question)
     logger.debug(f"Keywords: {search_keywords}")
     if search_keywords and len(search_keywords) > 0:
         if len(search_keywords) > 1:
@@ -194,7 +200,7 @@ def retrieve_documents(collection, question):
     return docs.values()
 
 
-def query_codebase(question, documents):
+def query_codebase(openai_client, config, messages, question, documents):
     context_documents = "\n\n".join(
         [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in documents]
     )
@@ -202,7 +208,7 @@ def query_codebase(question, documents):
     messages.append({"role": "user", "content": question})
     response_text = ""
     response = openai_client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=config.openai_model,
         messages=[
             {
                 "role": "system",
@@ -260,6 +266,22 @@ def main():
     if documents_only and not initial_question:
         parser.error("--question is required when using --documents-only")
 
+    messages = []
+    config = Config.load()
+    os.makedirs(config.db_path, exist_ok=True)
+    openai_client = OpenAI(
+        api_key=config.openai_api_key, base_url=config.openai_base_url
+    )
+    kw_extractor = KeyLLM(
+        KeyBERTOpenAI(model=config.openai_model, client=openai_client, chat=True)
+    )
+    client = chromadb.PersistentClient(
+        path=config.db_path, settings=Settings(anonymized_telemetry=False)
+    )
+    embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name="all-mpnet-base-v2"
+    )
+
     try:
         if args.skip_index:
             name = collection_name(directory)
@@ -270,21 +292,29 @@ def main():
                     f"Warning: No existing collection for {directory}. Indexing is required."
                 )
                 collection = index_directory(
-                    directory, ignore_gitignore, disable_progress_bar=no_progress_bar
+                    client,
+                    embedding_function,
+                    directory,
+                    ignore_gitignore,
+                    disable_progress_bar=no_progress_bar,
                 )
         else:
             collection = index_directory(
-                directory, ignore_gitignore, disable_progress_bar=no_progress_bar
+                client,
+                embedding_function,
+                directory,
+                ignore_gitignore,
+                disable_progress_bar=no_progress_bar,
             )
 
         if index_only:
             return
 
-        if not os.path.exists(HISTORY_FILE):
-            os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-            with open(HISTORY_FILE, "wb") as f:
+        if not os.path.exists(config.history_file):
+            os.makedirs(os.path.dirname(config.history_file), exist_ok=True)
+            with open(config.history_file, "wb"):
                 pass  # create the file
-        readline.read_history_file(HISTORY_FILE)
+        readline.read_history_file(config.history_file)
         looped = False
         while True:
             if initial_question and not looped:
@@ -298,15 +328,19 @@ def main():
                 break
 
             print("", flush=True)
-            documents = retrieve_documents(collection, question)
+            documents = retrieve_documents(
+                kw_extractor, config, messages, collection, question
+            )
             if documents_only:
                 for doc in documents:
                     print(doc)
                 break
-            for part in query_codebase(question, documents):
+            for part in query_codebase(
+                openai_client, config, messages, question, documents
+            ):
                 print(part, end="", flush=True)
             print()  # For a new line after the full response
-            readline.write_history_file(HISTORY_FILE)
+            readline.write_history_file(config.history_file)
     except KeyboardInterrupt:
         pass
 
