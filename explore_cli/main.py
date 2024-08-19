@@ -8,8 +8,8 @@ import chromadb
 import hashlib
 import gnureadline as readline
 import textwrap
+import toml
 
-from collections import Counter
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from dataclasses import dataclass
@@ -45,18 +45,23 @@ class Config:
     chromadb_n_results: int
     db_path: str
     history_file: str
-    log_level: str
 
     @classmethod
-    def load(cls):
+    def load(cls, config_path):
+        with open(config_path, "a+") as f:
+            # Create the file if it doesn't exist
+            pass
+        with open(config_path, "r") as f:
+            config = toml.load(f)
+        get = lambda key, default: os.getenv(key.upper(), config.get(key, default))
+        get_required = lambda key: os.getenv(key.upper(), config[key])
         return cls(
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
-            openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-            openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            chromadb_n_results=int(os.getenv("CHROMADB_N_RESULTS", 4)),
+            openai_api_key=get_required("openai_api_key"),
+            openai_base_url=get("openai_base_url", "https://api.openai.com/v1"),
+            openai_model=get("openai_model", "gpt-4o-mini"),
+            chromadb_n_results=int(get("chromadb_n_results", 4)),
             db_path=os.path.join(os.getenv("HOME"), ".explore", "db"),
             history_file=os.path.join(os.getenv("HOME"), ".explore", "history"),
-            log_level=os.getenv("LOG_LEVEL", "ERROR"),
         )
 
 
@@ -254,6 +259,11 @@ def main():
     parser.add_argument(
         "--index-only", help="Only index the directory", action="store_true"
     )
+    parser.add_argument(
+        "--config",
+        help="Path to the config file",
+        default=os.path.join(os.getenv("HOME"), ".explore", "config.toml"),
+    )
     args = parser.parse_args()
 
     directory = os.path.abspath(os.path.expanduser(args.directory))
@@ -262,12 +272,14 @@ def main():
     initial_question = args.question
     no_progress_bar = args.no_progress_bar
     index_only = args.index_only
+    config_path = args.config
 
     if documents_only and not initial_question:
         parser.error("--question is required when using --documents-only")
 
     messages = []
-    config = Config.load()
+    config = Config.load(config_path)
+    logger.debug(f"Config: {config}")
     os.makedirs(config.db_path, exist_ok=True)
     openai_client = OpenAI(
         api_key=config.openai_api_key, base_url=config.openai_base_url

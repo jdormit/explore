@@ -17,6 +17,7 @@ tqdm = "^4.66.5"
 pathspec = "^0.12.1"
 sentence-transformers = "^3.0.1"
 keybert = "^0.8.5"
+toml = "^0.10.2"
 
 
 [build-system]
