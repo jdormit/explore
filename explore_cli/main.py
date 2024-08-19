@@ -21,7 +21,6 @@ from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
 from tqdm import tqdm
 
-FILE_MAX_LEN = 10000
 IGNORED_PATTERNS = [
     "**/.git/*",
     "*.tmp",
@@ -46,6 +45,7 @@ class Config:
     history_file: str
     num_docs: int
     num_context_docs: int
+    doc_max_length: int
 
     @classmethod
     def load(cls, config_path):
@@ -64,6 +64,7 @@ class Config:
             history_file=os.path.join(os.getenv("HOME"), ".explore", "history"),
             num_docs=int(get("num_docs", 5)),
             num_context_docs=int(get("num_context_docs", 2)),
+            doc_max_length=int(get("doc_max_length", 10000)),
         )
 
 
@@ -232,7 +233,7 @@ def retrieve_documents(kw_extractor, config, messages, collection, question):
 
 def query_codebase(openai_client, config, messages, question, documents):
     context_documents = "\n\n".join(
-        [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in documents]
+        [textwrap.shorten(doc, width=config.doc_max_length) for doc in documents]
     )
 
     messages.append(
