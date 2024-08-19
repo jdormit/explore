@@ -42,9 +42,10 @@ class Config:
     openai_api_key: str
     openai_base_url: str
     openai_model: str
-    chromadb_n_results: int
     db_path: str
     history_file: str
+    num_docs: int
+    num_context_docs: int
 
     @classmethod
     def load(cls, config_path):
@@ -59,9 +60,10 @@ class Config:
             openai_api_key=get_required("openai_api_key"),
             openai_base_url=get("openai_base_url", "https://api.openai.com/v1"),
             openai_model=get("openai_model", "gpt-4o-mini"),
-            chromadb_n_results=int(get("chromadb_n_results", 4)),
             db_path=os.path.join(os.getenv("HOME"), ".explore", "db"),
             history_file=os.path.join(os.getenv("HOME"), ".explore", "history"),
+            num_docs=int(get("num_docs", 5)),
+            num_context_docs=int(get("num_context_docs", 2)),
         )
 
 
@@ -72,7 +74,7 @@ def collection_name(directory):
 def extract_keywords(kw_extractor, text):
     keywords = set(kw_extractor.extract_keywords(text)[0])
     keywords = keywords.union({k.lower() for k in keywords})
-    return list(keywords)
+    return [k.strip("'\" ") for k in keywords]
 
 
 def load_gitignore(directory):
@@ -89,8 +91,14 @@ def index_directory(
     directory,
     ignore_gitignore=True,
     disable_progress_bar=False,
+    reindex=False,
 ):
     name = collection_name(directory)
+    if reindex:
+        try:
+            client.delete_collection(name=name)
+        except ValueError:
+            pass
     collection = client.get_or_create_collection(
         name=name, embedding_function=embedding_function
     )
@@ -130,6 +138,7 @@ def index_directory(
         if (
             len(get_res["ids"]) > 0
             and get_res["metadatas"][0].get("modified_time", -1.0) == modified_time
+            and not reindex
         ):
             progress_bar.update(1)
             continue
@@ -154,32 +163,18 @@ def retrieve_documents(kw_extractor, config, messages, collection, question):
 
     initial_results = collection.query(
         query_texts=[question],
-        n_results=config.chromadb_n_results,
     )
-    for doc, meta in zip(
-        initial_results["documents"][0], initial_results["metadatas"][0]
+    for doc, meta, distance in zip(
+        initial_results["documents"][0],
+        initial_results["metadatas"][0],
+        initial_results["distances"][0],
     ):
-        docs[meta["path"]] = doc
+        docs[meta["path"]] = {"document": doc, "distance": distance}
 
     logger.debug(
         f"Query documents: {[meta['path'] for meta in initial_results['metadatas'][0]]}"
     )
 
-    conversation_history = " ".join(msg["content"] for msg in messages)
-    additional_results = collection.query(
-        query_texts=[conversation_history],
-        n_results=3,
-    )
-
-    for doc, meta in zip(
-        additional_results["documents"][0], additional_results["metadatas"][0]
-    ):
-        if meta["path"] not in docs:
-            docs[meta["path"]] = doc
-
-    logger.debug(
-        f"Context documents: {[meta['path'] for meta in additional_results['metadatas'][0]]}"
-    )
     search_keywords = extract_keywords(kw_extractor, question)
     logger.debug(f"Keywords: {search_keywords}")
     if search_keywords and len(search_keywords) > 0:
@@ -189,20 +184,50 @@ def retrieve_documents(kw_extractor, config, messages, collection, question):
             }
         else:
             where_document = {"$contains": search_keywords[0]}
-        keyword_results = collection.get(
-            limit=4,
+        keyword_results = collection.query(
+            query_texts=[question],
             where_document=where_document,
         )
-        for doc, meta in zip(
-            keyword_results["documents"], keyword_results["metadatas"]
+        for doc, meta, distance in zip(
+            keyword_results["documents"][0],
+            keyword_results["metadatas"][0],
+            keyword_results["distances"][0],
         ):
             if meta["path"] not in docs:
-                docs[meta["path"]] = doc
+                docs[meta["path"]] = {"document": doc, "distance": distance}
         logger.debug(
-            f"Keyword documents: {[meta['path'] for meta in keyword_results['metadatas']]}"
+            f"Keyword documents: {[meta['path'] for meta in keyword_results['metadatas'][0]]}"
         )
 
-    return docs.values()
+    # Sort by distance, take the top N then reverse so that more relevant documents are later in the prompt
+    question_docs = list(
+        reversed(
+            [d["document"] for d in sorted(docs.values(), key=lambda d: d["distance"])][
+                : config.num_docs
+            ]
+        )
+    )
+
+    if len(messages) > 1:
+        conversation_history = " ".join(msg["content"] for msg in messages)
+        additional_results = collection.query(
+            query_texts=[conversation_history],
+            n_results=config.num_context_docs,
+        )
+        context_docs = []
+        for doc, meta in zip(
+            additional_results["documents"][0], additional_results["metadatas"][0]
+        ):
+            if meta["path"] not in docs:
+                context_docs.append(doc)
+
+        logger.debug(
+            f"Context documents: {[meta['path'] for meta in additional_results['metadatas'][0]]}"
+        )
+    else:
+        context_docs = []
+
+    return context_docs + question_docs
 
 
 def query_codebase(openai_client, config, messages, question, documents):
@@ -210,15 +235,21 @@ def query_codebase(openai_client, config, messages, question, documents):
         [textwrap.shorten(doc, width=FILE_MAX_LEN) for doc in documents]
     )
 
-    messages.append({"role": "user", "content": question})
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Answer the following question about the provided source documents, ignoring any documents that don't seem relevant: {question}",
+        }
+    )
     response_text = ""
     response = openai_client.chat.completions.create(
         model=config.openai_model,
         messages=[
             {
                 "role": "system",
-                "content": f"You are an expert in understanding and explaining code. You will be asked a question about a codebase, respond concisely.\n\nRelevant source files: {context_documents}",
-            }
+                "content": f"You are an expert in understanding and explaining code. You will be asked a question about a codebase, respond concisely.",
+            },
+            {"role": "user", "content": f"Relevant source files: {context_documents}"},
         ]
         + messages,
         stream=True,
@@ -241,6 +272,9 @@ def main():
         "--skip-index",
         action="store_true",
         help="skip indexing the directory (warning: if the directory hasn't been indexed at least once, it will be indexed anyway)",
+    )
+    parser.add_argument(
+        "--reindex", action="store_true", help="Reindex the whole directory"
     )
     parser.add_argument(
         "--no-ignore", action="store_true", help="Disable respecting .gitignore files"
@@ -272,6 +306,7 @@ def main():
     initial_question = args.question
     no_progress_bar = args.no_progress_bar
     index_only = args.index_only
+    reindex = args.reindex
     config_path = args.config
 
     if documents_only and not initial_question:
@@ -317,6 +352,7 @@ def main():
                 directory,
                 ignore_gitignore,
                 disable_progress_bar=no_progress_bar,
+                reindex=reindex,
             )
 
         if index_only:
