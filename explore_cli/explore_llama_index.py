@@ -6,15 +6,24 @@ import sys
 import chromadb
 import chromadb.config
 import gnureadline as readline
+from httpx import stream
+import llama_index.core
 from llama_index.core import (
     Settings,
     SimpleDirectoryReader,
     VectorStoreIndex,
+    get_response_synthesizer
 )
-from llama_index.core.chat_engine.types import ChatMode
+from llama_index.core.chat_engine import CondenseQuestionChatEngine
+from llama_index.core.indices.query.query_transform.base import HyDEQueryTransform
+from llama_index.core.query_engine import TransformQueryEngine, MultiStepQueryEngine
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core.indices.query.query_transform.base import (
+    StepDecomposeQueryTransform,
+)
+
 
 CONFIG_PATH = os.path.join(str(Path.home()), ".explore")
 CHROMADB_PATH = os.path.join(CONFIG_PATH, "db")
@@ -47,7 +56,7 @@ def main():
         "-k",
         "--top-k",
         type=int,
-        default=2,
+        default=3,
         help="Number of context documents to pass to the LLM.",
     )
     args = parser.parse_args()
@@ -55,6 +64,7 @@ def main():
     if args.debug:
         logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
         logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
+        llama_index.core.set_global_handler("simple")
 
     readline.read_history_file(HISTORY_FILE)
 
@@ -86,9 +96,21 @@ def main():
     # Perform the vector search as usual and also a keyword search,
     # then rerank the results using https://docs.llamaindex.ai/en/stable/module_guides/querying/node_postprocessors/node_postprocessors/#llm-rerank
 
-    chat_engine = index.as_chat_engine(
-        chat_mode=ChatMode.CONDENSE_PLUS_CONTEXT, similarity_top_k=args.top_k
+    # hyde = HyDEQueryTransform(include_original=True)
+    query_engine = index.as_query_engine(similarity_top_k=args.top_k)
+    # hyde_engine = TransformQueryEngine(query_engine, query_transform=hyde)
+    step_decompose_transform = StepDecomposeQueryTransform(verbose=args.verbose)
+    response_synthesizer = get_response_synthesizer(streaming=True)
+    multi_step_engine = MultiStepQueryEngine(
+        query_engine=query_engine,
+        query_transform=step_decompose_transform,
+        index_summary="Used to answer questions about the codebase",
+        response_synthesizer=response_synthesizer
     )
+    chat_engine = CondenseQuestionChatEngine.from_defaults(
+        query_engine=multi_step_engine, verbose=args.verbose
+    )
+
     while True:
         question = input("Ask a question about the codebase (or type 'exit' to quit): ")
         if question == "exit":
