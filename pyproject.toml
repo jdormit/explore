@@ -29,6 +29,7 @@ chromadb = "0.5.3"
 unstructured = "^0.15.10"
 langchain-core = "^0.3.13"
 langchain-huggingface = "^0.1.1"
+langchain-text-splitters = "^0.3.1"
 
 
 [build-system]
