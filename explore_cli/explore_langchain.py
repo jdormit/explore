@@ -121,8 +121,6 @@ def split_docs(documents):
 
 def collect_documents(directory, use_gitignore=True):
     pathspec = load_gitignore(directory) if use_gitignore else None
-    docs = []
-    # TODO: skip files that haven't changed
     for root, _, dir_files in os.walk(directory):
         for file in dir_files:
             if not (
@@ -133,14 +131,13 @@ def collect_documents(directory, use_gitignore=True):
                 or (pathspec and pathspec.match_file(file))
             ):
                 try:
-                    docs.extend(
-                        TextLoader(
-                            file_path=os.path.join(root, file), autodetect_encoding=True
-                        ).load()
-                    )
+                    doc = TextLoader(
+                        file_path=os.path.join(root, file), autodetect_encoding=True
+                    ).load()
+                    for chunk in split_docs(doc):
+                        yield chunk
                 except Exception as e:
                     print(f"Error loading {os.path.join(root, file)}: {e}")
-    return split_docs(docs)
 
 
 def format_docs(docs):
