@@ -3,19 +3,24 @@ from fnmatch import fnmatch
 import gnureadline as readline
 import os
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.text_splitter import Language
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+    PromptTemplate,
+)
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathspec import PathSpec
 from pathspec.patterns.gitwildmatch import GitWildMatchPattern
-from pydantic_core.core_schema import FieldPlainInfoSerializerFunction
 from rich.console import Console
 from rich.markdown import Markdown
 from sklearn.base import defaultdict
@@ -178,6 +183,7 @@ def main():
                 "system",
                 "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point. Make sure to mention the specific files and code from the context that you are referring to in your answers.\n\n{context}",
             ),
+            MessagesPlaceholder("chat_history"),
             ("human", "{input}"),
         ]
     )
@@ -188,22 +194,52 @@ def main():
     multi_query_retriever = MultiQueryRetriever.from_llm(
         retriever=vector_retriever, llm=llm
     )
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    history_aware_retriever = create_history_aware_retriever(
+        llm, multi_query_retriever, contextualize_q_prompt
+    )
     qa_chain = create_stuff_documents_chain(
         llm=llm,
         prompt=prompt,
         document_prompt=PromptTemplate.from_template("{source}:\n{page_content}"),
     )
     retrieval_chain = create_retrieval_chain(
-        retriever=multi_query_retriever, combine_docs_chain=qa_chain
+        retriever=history_aware_retriever, combine_docs_chain=qa_chain
     )
-    question = input("Ask a question about the codebase: ")
-    readline.write_history_file(history_file)
 
-    # The rich library can't parse streaming Markdown, so we can't stream if we want Markdown rendering
-    with console.status("Thinking..."):
-        response = retrieval_chain.invoke({"input": question})
-    md = Markdown(response["answer"])
-    console.print(md)
+    chat_history = []
+
+    while True:
+        question = input("Ask a question about the codebase ('exit' to quit): ")
+        if question == "exit":
+            break
+        readline.write_history_file(history_file)
+
+        # The rich library can't parse streaming Markdown, so we can't stream if we want Markdown rendering
+        with console.status("Thinking..."):
+            response = retrieval_chain.invoke(
+                {"input": question, "chat_history": chat_history}
+            )
+        chat_history.extend(
+            [HumanMessage(content=question), AIMessage(content=response["answer"])]
+        )
+        md = Markdown(response["answer"])
+        console.print()
+        console.print(md)
 
 
 if __name__ == "__main__":
