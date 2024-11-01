@@ -66,6 +66,9 @@ LANGUAGES_BY_EXTENSION = {
     "hs": Language.HASKELL,
 }
 
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OLLAMA_MODEL = "mistral-nemo:latest"
+
 
 def collection_name(directory):
     return directory.replace("/", "_").strip("_")
@@ -153,8 +156,30 @@ def main():
         description="Interactively explore a codebase with an LLM."
     )
     parser.add_argument("directory", help="The directory to index and explore.")
+    parser.add_argument(
+        "-l",
+        "--llm",
+        help="The LLM backend, one of openai or ollama. Default: openai",
+        default="openai",
+    )
+    parser.add_argument(
+        "-m",
+        "--model",
+        help=f"The LLM model to use. Default: {DEFAULT_OPENAI_MODEL} for openai or {DEFAULT_OLLAMA_MODEL} for ollama",
+    )
 
     args = parser.parse_args()
+
+    if args.llm == "openai":
+        model = args.model or DEFAULT_OPENAI_MODEL
+        llm = ChatOpenAI(model=model)
+    elif args.llm == "ollama":
+        model = args.model or DEFAULT_OLLAMA_MODEL
+        llm = ChatOllama(model=model, num_ctx=4096)
+    else:
+        console.print(f"Invalid LLM backend: {args.llm}")
+        exit(1)
+
     directory = os.path.abspath(os.path.expanduser(args.directory))
     collection = collection_name(directory)
 
@@ -193,8 +218,6 @@ def main():
             source_id_key="source",
         )
 
-    # llm = ChatOllama(model="mistral-nemo:latest")
-    llm = ChatOpenAI(model="gpt-4o-mini")
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -205,7 +228,7 @@ def main():
             ("human", "{input}"),
         ]
     )
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
     # potential improvement here: use ParentDocumentRetriever to retrieve full or larger-chunk docs given smaller child chunks that are indexed
     # https://python.langchain.com/docs/how_to/parent_document_retriever/
     # Other interesting strategies here: https://python.langchain.com/docs/how_to/multi_vector/
