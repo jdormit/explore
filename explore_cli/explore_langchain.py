@@ -140,12 +140,6 @@ def collect_documents(directory, use_gitignore=True):
                     print(f"Error loading {os.path.join(root, file)}: {e}")
 
 
-def format_docs(docs):
-    return "\n\n".join(
-        [f"{doc.metadata['source']}:\n{doc.page_content}" for doc in docs]
-    )
-
-
 def main():
     console = Console()
 
