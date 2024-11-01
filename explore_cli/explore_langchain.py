@@ -161,6 +161,9 @@ def main():
 
     args = parser.parse_args()
 
+    explore_dir = os.path.join(os.getenv("HOME"), ".explore")
+    os.makedirs(explore_dir, exist_ok=True)
+
     if args.llm == "openai":
         model = args.model or DEFAULT_OPENAI_MODEL
         llm = ChatOpenAI(model=model)
