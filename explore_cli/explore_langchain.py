@@ -1,20 +1,27 @@
 import argparse
 from fnmatch import fnmatch
+import gnureadline as readline
 import os
+from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.text_splitter import Language
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathspec import PathSpec
 from pathspec.patterns.gitwildmatch import GitWildMatchPattern
+from pydantic_core.core_schema import FieldPlainInfoSerializerFunction
+from rich.console import Console
+from rich.markdown import Markdown
 from sklearn.base import defaultdict
+
+# disable huggingface tokenizers parallelism, it was giving a warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 IGNORED_PATTERNS = [
     "**/.git/*",
@@ -134,6 +141,8 @@ def format_docs(docs):
 
 
 def main():
+    console = Console()
+
     parser = argparse.ArgumentParser(
         description="Interactively explore a codebase with an LLM."
     )
@@ -141,12 +150,18 @@ def main():
 
     args = parser.parse_args()
     directory = os.path.abspath(os.path.expanduser(args.directory))
+    collection = collection_name(directory)
+    history_file = os.path.join(os.getenv("HOME"), ".explore", f"history-{collection}")
+    with open(history_file, "a"):
+        pass
+
+    readline.read_history_file(history_file)
 
     embedding_model = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2", show_progress=True
+        model_name="sentence-transformers/all-mpnet-base-v2"
     )
     vector_store = Chroma(
-        collection_name=collection_name(directory),
+        collection_name=collection,
         embedding_function=embedding_model,
         # TODO: need to figure out doc/chunk deduplication and upsert behavior before enabling persistence
         #        persist_directory=os.path.join(os.getenv("HOME"), ".explore", "db-langchain"),
@@ -155,36 +170,40 @@ def main():
     docs = collect_documents(directory)
     vector_store.add_documents(docs)
 
-    llm = ChatOllama(model="mistral-nemo:latest")
-    # llm = ChatOpenAI(model="gpt-4o")
+    # llm = ChatOllama(model="mistral-nemo:latest")
+    llm = ChatOpenAI(model="gpt-4o-mini")
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point. Make sure to mention the specific files and code from the context that you are referring to in your answers.",
+                "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point. Make sure to mention the specific files and code from the context that you are referring to in your answers.\n\n{context}",
             ),
-            ("human", "Context:\n{context}\n\nQuestion:\n{question}"),
+            ("human", "{input}"),
         ]
     )
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
-    multi_query_retriever = MultiQueryRetriever.from_llm(retriever=vector_retriever, llm=llm)
-    chain = (
-        {"context": multi_query_retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    # potential improvement here: use ParentDocumentRetriever to retrieve full or larger-chunk docs given smaller child chunks that are indexed
+    # https://python.langchain.com/docs/how_to/parent_document_retriever/
+    # Other interesting strategies here: https://python.langchain.com/docs/how_to/multi_vector/
+    multi_query_retriever = MultiQueryRetriever.from_llm(
+        retriever=vector_retriever, llm=llm
+    )
+    qa_chain = create_stuff_documents_chain(
+        llm=llm,
+        prompt=prompt,
+        document_prompt=PromptTemplate.from_template("{source}:\n{page_content}"),
+    )
+    retrieval_chain = create_retrieval_chain(
+        retriever=multi_query_retriever, combine_docs_chain=qa_chain
     )
     question = input("Ask a question about the codebase: ")
-    response = chain.invoke(question)
+    readline.write_history_file(history_file)
 
-    print(response)
-
-    # create chroma store from persisted path
-    # index any changed/new documents
-    # create chat engine
-    # RAG: have the LLM generate a query string to send to the vector store to retrieve relevant docs, then
-    # have the LLM generate a response given the query and context
-    # run chat in loop
+    # The rich library can't parse streaming Markdown, so we can't stream if we want Markdown rendering
+    with console.status("Thinking..."):
+        response = retrieval_chain.invoke({"input": question})
+    md = Markdown(response["answer"])
+    console.print(md)
 
 
 if __name__ == "__main__":
