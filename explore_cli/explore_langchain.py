@@ -5,6 +5,7 @@ import os
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
+from langchain.indexes import SQLRecordManager, index
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.text_splitter import Language
 from langchain_chroma import Chroma
@@ -156,9 +157,20 @@ def main():
     args = parser.parse_args()
     directory = os.path.abspath(os.path.expanduser(args.directory))
     collection = collection_name(directory)
+
     history_file = os.path.join(os.getenv("HOME"), ".explore", f"history-{collection}")
     with open(history_file, "a"):
         pass
+
+    record_manager_namespace = f"/chroma/{collection}"
+    record_manager_cache_db = os.path.join(
+        os.getenv("HOME"), ".explore", "record_manager_cache.db"
+    )
+    record_manager = SQLRecordManager(
+        namespace=record_manager_namespace,
+        db_url=f"sqlite:///{record_manager_cache_db}",
+    )
+    record_manager.create_schema()
 
     readline.read_history_file(history_file)
 
@@ -168,12 +180,18 @@ def main():
     vector_store = Chroma(
         collection_name=collection,
         embedding_function=embedding_model,
-        # TODO: need to figure out doc/chunk deduplication and upsert behavior before enabling persistence
-        #        persist_directory=os.path.join(os.getenv("HOME"), ".explore", "db-langchain"),
+        persist_directory=os.path.join(os.getenv("HOME"), ".explore", "db-langchain"),
     )
 
     docs = collect_documents(directory)
-    vector_store.add_documents(docs)
+    with console.status("Indexing codebase..."):
+        index(
+            docs_source=docs,
+            record_manager=record_manager,
+            vector_store=vector_store,
+            cleanup="full",
+            source_id_key="source",
+        )
 
     # llm = ChatOllama(model="mistral-nemo:latest")
     llm = ChatOpenAI(model="gpt-4o-mini")
