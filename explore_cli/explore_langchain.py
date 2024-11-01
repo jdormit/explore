@@ -194,6 +194,7 @@ def main():
     multi_query_retriever = MultiQueryRetriever.from_llm(
         retriever=vector_retriever, llm=llm
     )
+    # https://python.langchain.com/docs/tutorials/qa_chat_history/
     contextualize_q_system_prompt = (
         "Given a chat history and the latest user question "
         "which might reference context in the chat history, "
