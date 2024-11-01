@@ -1,14 +1,16 @@
 import argparse
 from fnmatch import fnmatch
 import os
+from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain.text_splitter import Language
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathspec import PathSpec
 from pathspec.patterns.gitwildmatch import GitWildMatchPattern
@@ -154,18 +156,20 @@ def main():
     vector_store.add_documents(docs)
 
     llm = ChatOllama(model="mistral-nemo:latest")
+    # llm = ChatOpenAI(model="gpt-4o")
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point.",
+                "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point. Make sure to mention the specific files and code from the context that you are referring to in your answers.",
             ),
             ("human", "Context:\n{context}\n\nQuestion:\n{question}"),
         ]
     )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 8})
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 8})
+    multi_query_retriever = MultiQueryRetriever.from_llm(retriever=vector_retriever, llm=llm)
     chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        {"context": multi_query_retriever | format_docs, "question": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()
