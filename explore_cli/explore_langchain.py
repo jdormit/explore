@@ -29,11 +29,13 @@ from sklearn.base import defaultdict
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 IGNORED_PATTERNS = [
+    ".git/*",
     "**/.git/*",
     "*.tmp",
     "*.log",
     "*.swp",
     "*.bak",
+    "node_modules/*",
     "**/node_modules/*",
     "*.sock",
 ]
