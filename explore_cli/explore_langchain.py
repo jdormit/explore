@@ -20,8 +20,7 @@ from langchain_core.prompts import (
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pathspec import PathSpec
-from pathspec.patterns.gitwildmatch import GitWildMatchPattern
+from pathspec import GitIgnoreSpec
 from rich.console import Console
 from rich.markdown import Markdown
 from sklearn.base import defaultdict
@@ -78,7 +77,7 @@ def load_gitignore(directory):
     gitignore_path = os.path.join(directory, ".gitignore")
     if os.path.exists(gitignore_path):
         with open(gitignore_path, "r") as f:
-            return PathSpec.from_lines(GitWildMatchPattern, f)
+            return GitIgnoreSpec.from_lines(f)
     return None
 
 
@@ -123,12 +122,10 @@ def collect_documents(directory, use_gitignore=True):
     pathspec = load_gitignore(directory) if use_gitignore else None
     for root, _, dir_files in os.walk(directory):
         for file in dir_files:
+            relative_path = os.path.relpath(os.path.join(root, file), directory)
             if not (
-                any(
-                    fnmatch(os.path.join(root, file), pattern)
-                    for pattern in IGNORED_PATTERNS
-                )
-                or (pathspec and pathspec.match_file(file))
+                any(fnmatch(relative_path, pattern) for pattern in IGNORED_PATTERNS)
+                or (pathspec and pathspec.match_file(relative_path))
             ):
                 try:
                     doc = TextLoader(
