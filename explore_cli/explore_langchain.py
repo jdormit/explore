@@ -99,6 +99,16 @@ def separators_for_extension(extension):
             "\n",
             " ",
         ]
+    elif extension == "tf":
+        return [
+            'resource "',
+            'data "',
+            'variable "',
+            'module "',
+            'output "',
+            "\n\n",
+            "\n",
+        ]
     return None
 
 
