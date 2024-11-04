@@ -10,7 +10,7 @@
 ## Installation
 `explore` is available [on PyPI](https://pypi.org/project/explore-cli/). I recommend installing it with [`pipx`](https://github.com/pypa/pipx):
 
-``` sh
+```sh
 pipx install explore-cli
 export OPENAI_API_KEY=<your OpenAI API key>
 explore <directory>
@@ -18,7 +18,7 @@ explore <directory>
 
 Alternatively, you can clone this repository and run the script with [`poetry`](https://python-poetry.org/):
 
-``` sh
+```sh
 poetry install
 poetry build
 export OPENAI_API_KEY=<your OpenAI API key>
@@ -27,42 +27,17 @@ poetry run explore <directory>
 
 ## Usage
 
-``` sh
-usage: explore [-h] [--skip-index] [--no-ignore] [--documents-only] [--question QUESTION] [--no-progress-bar]
-               [--index-only]
-               directory
+```sh
+usage: explore [-h] [-l LLM] [-m MODEL] directory
 
 Interactively explore a codebase with an LLM.
 
 positional arguments:
-  directory            The directory to index and explore.
+  directory             The directory to index and explore.
 
 options:
-  -h, --help           show this help message and exit
-  --skip-index         skip indexing the directory (warning: if the directory hasn't been indexed at least once, it
-                       will be indexed anyway)
-  --no-ignore          Disable respecting .gitignore files
-  --documents-only     Only print documents, then exit. --question must be provided
-  --question QUESTION  Initial question to ask (will prompt if not provided)
-  --no-progress-bar    Disable progress bar
-  --index-only         Only index the directory
+  -h, --help            show this help message and exit
+  -l LLM, --llm LLM     The LLM backend, one of openai or ollama. Default: openai
+  -m MODEL, --model MODEL
+                        The LLM model to use. Default: gpt-4o-mini for openai or mistral-nemo:latest for ollama
 ```
-
-## Configuration
-There are a couple of environment variables you can set to configure `explore`:
-| Name  | Description  |
-|---|---|
-| `OPENAI_API_KEY` | Required. Your API key for the OpenAI API |
-| `OPENAI_BASE_URL`  | The base URL used for OpenAI API requests. You can set this to use any OpenAI-compatible APIs (e.g. [Ollama](https://ollama.com/blog/openai-compatibility) to run models locally). Default: `https://api.openai.com/v1` |
-| `OPENAI_MODEL`  |  Which model to tell the OpenAI API to use. The default is `gpt-4o-mini`, which strikes a good balance between coherence and price. You can get better results if you set this to `gpt-4o`, but bear in mind `explore` can generate extremely long prompts so that could get expensive quickly |
-
-
-## How it works
-1. The directory is indexed into a local Chroma store. Only files that have been modified since the last time they were indexed get re-indexed, so this step will be quite slow on the first execution but pretty quick after that.
-2. Documents relevant to the query are collected in three ways:
-   1. The question is embedded as a vector and used to search for the nearest matches in the Chroma DB
-   2. The entire conversation so far is embedded as a vector and used to search for more matches in Chroma
-   3. Search keywords are extracted from the question and used to find exact matching text in the indexed documents
-   
-   By default, `explore` will fetch 4 documents using the first approach, 3 using the second and 4 using the third.
-3. The documents are deduplicated, concatenated and prepended to the ongoing conversation, then the latest question is appended. The whole thing is sent to the LLM, which returns an answer to the question based on the provided documents.
