@@ -97,6 +97,8 @@ LANGUAGES_BY_EXTENSION = {
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_MODEL = "mistral-nemo:latest"
 
+VECTOR_STORE_TOP_K = 5
+
 
 def collection_name(directory):
     return directory.replace("/", "_").strip("_")
@@ -256,7 +258,9 @@ def main():
             ("human", "{input}"),
         ]
     )
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    vector_retriever = vector_store.as_retriever(
+        search_kwargs={"k": VECTOR_STORE_TOP_K}
+    )
     # potential improvement here: use ParentDocumentRetriever to retrieve full or larger-chunk docs given smaller child chunks that are indexed
     # https://python.langchain.com/docs/how_to/parent_document_retriever/
     # Other interesting strategies here: https://python.langchain.com/docs/how_to/multi_vector/
