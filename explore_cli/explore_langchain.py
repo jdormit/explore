@@ -186,14 +186,12 @@ def main():
     directory = os.path.abspath(os.path.expanduser(args.directory))
     collection = collection_name(directory)
 
-    history_file = os.path.join(os.getenv("HOME"), ".explore", f"history-{collection}")
+    history_file = os.path.join(explore_dir, f"history-{collection}")
     with open(history_file, "a"):
         pass
 
     record_manager_namespace = f"/chroma/{collection}"
-    record_manager_cache_db = os.path.join(
-        os.getenv("HOME"), ".explore", "record_manager_cache.db"
-    )
+    record_manager_cache_db = os.path.join(explore_dir, "record_manager_cache.db")
     record_manager = SQLRecordManager(
         namespace=record_manager_namespace,
         db_url=f"sqlite:///{record_manager_cache_db}",
@@ -208,7 +206,7 @@ def main():
     vector_store = Chroma(
         collection_name=collection,
         embedding_function=embedding_model,
-        persist_directory=os.path.join(os.getenv("HOME"), ".explore", "db-langchain"),
+        persist_directory=os.path.join(explore_dir, "db-langchain"),
     )
 
     docs = collect_documents(directory)
