@@ -41,3 +41,11 @@ options:
   -m MODEL, --model MODEL
                         The LLM model to use. Default: gpt-4o-mini for openai or mistral-nemo:latest for ollama
 ```
+
+## How it works
+1. The codebase is indexed into a local Chroma store. Each file is split into chunks using language-specific separators.
+2. Documents relevant to the query are collected using multiple retrieval strategies:
+   - Primary retrieval is done through vector similarity using the indexed embeddings.
+   - A multi-query retriever issues multiple variations of the query to increase the diversity and relevance of retrieved documents.
+   - Additionally, a history-aware retriever reformulates the user query, considering the conversation history to better capture context.
+3. Retrieved documents are deduplicated, concatenated, and added as context to the LLM, which generates an answer to the user's question. Answers include specific references to the files and code pertinent to the query.
