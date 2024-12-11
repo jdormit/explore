@@ -6,7 +6,7 @@ authors = ["Jeremy Dormitzer <jeremy.dormitzer@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.scripts]
-explore = "explore_cli.explore_langchain:main"
+explore = "explore_cli.main:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"

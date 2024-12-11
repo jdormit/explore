@@ -1,401 +1,334 @@
-import os
-import logging
-
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "ERROR").upper())
-
+from azure.identity import DefaultAzureCredential
 import argparse
-import chromadb
-import hashlib
-import gnureadline as readline
-import textwrap
-import toml
-
-from chromadb.config import Settings
-from chromadb.utils import embedding_functions
-from dataclasses import dataclass
 from fnmatch import fnmatch
-from keybert.llm import OpenAI as KeyBERTOpenAI
-from keybert import KeyLLM
-from openai import OpenAI
-from pathspec import PathSpec
-from pathspec.patterns import GitWildMatchPattern
-from tqdm import tqdm
+import gnureadline as readline
+import os
+from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.indexes import SQLRecordManager, index
+from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain.text_splitter import Language
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import TextLoader
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+    PromptTemplate,
+)
+from langchain_ollama import ChatOllama
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pathspec import GitIgnoreSpec
+from rich.console import Console
+from rich.markdown import Markdown
+from sklearn.base import defaultdict
+
+# disable huggingface tokenizers parallelism, it was giving a warning
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 IGNORED_PATTERNS = [
+    ".git/*",
     "**/.git/*",
     "*.tmp",
     "*.log",
     "*.swp",
     "*.bak",
+    "*.rbi",
+    "*.crt",
+    "*.key",
+    ".venv/*",
+    "venv/*",
+    "**/venv/*",
+    "**/.venv/*",
+    ".vscode/*",
+    ".idea/*",
+    ".DS_Store",
+    "Thumbs.db",
+    "*.temp",
+    "*.cache",
+    "*.bak",
+    "*.core",
+    "*.dmp",
+    "*.lock",
+    ".#*",
+    "*~",
+    "out/*",
+    ".next/*",
+    "node_modules/*",
+    "*.tar.gz",
+    "*.zip",
     "**/node_modules/*",
     "*.sock",
+    "*.jar",
+    "*.pyc",
+    "*.class",
+    "*.dll",
+    "*.exe",
+    "*.so",
+    "*.o",
 ]
-# disable huggingface tokenizers parallelism, it was giving a warning
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-logger = logging.getLogger()
+LANGUAGES_BY_EXTENSION = {
+    "cpp": Language.CPP,
+    "go": Language.GO,
+    "java": Language.JAVA,
+    "kt": Language.KOTLIN,
+    "js": Language.JS,
+    "ts": Language.TS,
+    "php": Language.PHP,
+    "proto": Language.PROTO,
+    "py": Language.PYTHON,
+    "rst": Language.RST,
+    "rb": Language.RUBY,
+    "rs": Language.RUST,
+    "scala": Language.SCALA,
+    "swift": Language.SWIFT,
+    "md": Language.MARKDOWN,
+    "tex": Language.LATEX,
+    "html": Language.HTML,
+    "sol": Language.SOL,
+    "cs": Language.CSHARP,
+    "cbl": Language.COBOL,
+    "c": Language.C,
+    "lua": Language.LUA,
+    "pl": Language.PERL,
+    "hs": Language.HASKELL,
+}
 
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OLLAMA_MODEL = "mistral-nemo:latest"
+DEFAULT_AZURE_MODEL = "gpt-4o"
 
-@dataclass
-class Config:
-    openai_api_key: str
-    openai_base_url: str
-    openai_model: str
-    db_path: str
-    history_file: str
-    num_docs: int
-    num_context_docs: int
-    doc_max_length: int
-
-    @classmethod
-    def load(cls, config_path):
-        with open(config_path, "a+") as f:
-            # Create the file if it doesn't exist
-            pass
-        with open(config_path, "r") as f:
-            config = toml.load(f)
-        get = lambda key, default: os.getenv(key.upper(), config.get(key, default))
-        get_required = lambda key: os.getenv(key.upper(), config[key])
-        return cls(
-            openai_api_key=get_required("openai_api_key"),
-            openai_base_url=get("openai_base_url", "https://api.openai.com/v1"),
-            openai_model=get("openai_model", "gpt-4o-mini"),
-            db_path=os.path.join(os.getenv("HOME"), ".explore", "db"),
-            history_file=os.path.join(os.getenv("HOME"), ".explore", "history"),
-            num_docs=int(get("num_docs", 5)),
-            num_context_docs=int(get("num_context_docs", 2)),
-            doc_max_length=int(get("doc_max_length", 10000)),
-        )
+VECTOR_STORE_TOP_K = 5
 
 
 def collection_name(directory):
     return directory.replace("/", "_").strip("_")
 
 
-def extract_keywords(kw_extractor, text):
-    keywords = set(kw_extractor.extract_keywords(text)[0])
-    keywords = keywords.union({k.lower() for k in keywords})
-    return [k.strip("'\" ") for k in keywords]
-
-
 def load_gitignore(directory):
     gitignore_path = os.path.join(directory, ".gitignore")
     if os.path.exists(gitignore_path):
         with open(gitignore_path, "r") as f:
-            return PathSpec.from_lines(GitWildMatchPattern, f)
+            return GitIgnoreSpec.from_lines(f)
     return None
 
 
-def index_directory(
-    client,
-    embedding_function,
-    directory,
-    ignore_gitignore=True,
-    disable_progress_bar=False,
-    reindex=False,
-):
-    name = collection_name(directory)
-    if reindex:
-        try:
-            client.delete_collection(name=name)
-        except ValueError:
-            pass
-    collection = client.get_or_create_collection(
-        name=name, embedding_function=embedding_function
-    )
+def separators_for_extension(extension):
+    if extension in LANGUAGES_BY_EXTENSION:
+        return RecursiveCharacterTextSplitter.get_separators_for_language(
+            LANGUAGES_BY_EXTENSION[extension]
+        )
+    if extension == "el":
+        return [
+            "(use-package",
+            "(defun ",
+            "(defvar ",
+            "(let",
+            "(if",
+            "\n\n",
+            "\n",
+            " ",
+        ]
+    elif extension == "tf":
+        return [
+            'resource "',
+            'data "',
+            'variable "',
+            'module "',
+            'output "',
+            "\n\n",
+            "\n",
+        ]
+    return None
 
-    pathspec = load_gitignore(directory) if ignore_gitignore else None
 
-    count_progress = tqdm(
-        desc="Collecting files", unit=" files", disable=disable_progress_bar
-    )
-    files = []
+def split_docs(documents):
+    split_docs = []
+    docs_by_extension = defaultdict(list)
+    for doc in documents:
+        docs_by_extension[doc.metadata["source"].split(".")[-1]].append(doc)
+    for ext, docs in docs_by_extension.items():
+        separators = separators_for_extension(ext)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,
+            chunk_overlap=250,
+            length_function=len,
+            is_separator_regex=False,
+            separators=separators,
+        )
+        split_docs.extend(splitter.transform_documents(docs))
+    return split_docs
+
+
+def collect_documents(directory, use_gitignore=True):
+    pathspec = load_gitignore(directory) if use_gitignore else None
     for root, _, dir_files in os.walk(directory):
         for file in dir_files:
+            relative_path = os.path.relpath(os.path.join(root, file), directory)
             if not (
-                any(
-                    fnmatch(os.path.join(root, file), pattern)
-                    for pattern in IGNORED_PATTERNS
-                )
-                or (pathspec and pathspec.match_file(file))
+                any(fnmatch(relative_path, pattern) for pattern in IGNORED_PATTERNS)
+                or (pathspec and pathspec.match_file(relative_path))
             ):
-                files.append(os.path.join(root, file))
-                count_progress.update(1)
-
-    count_progress.close()
-
-    progress_bar = tqdm(
-        total=len(files),
-        desc="Indexing files",
-        unit=" files",
-        miniters=1,
-        disable=disable_progress_bar,
-    )
-
-    for file_path in files:
-        doc_id = hashlib.md5(file_path.encode("utf-8")).hexdigest()
-        modified_time = os.path.getmtime(file_path)
-        get_res = collection.get(ids=[doc_id], include=["metadatas"], limit=1)
-        if (
-            len(get_res["ids"]) > 0
-            and get_res["metadatas"][0].get("modified_time", -1.0) == modified_time
-            and not reindex
-        ):
-            progress_bar.update(1)
-            continue
-        with open(file_path, "r") as f:
-            try:
-                content = f"{file_path}:\n\n{f.read()}"
-                collection.upsert(
-                    documents=[content],
-                    ids=[doc_id],
-                    metadatas=[{"path": file_path, "modified_time": modified_time}],
-                )
-                progress_bar.update(1)
-            except UnicodeDecodeError:
-                logger.warning(f"Invalid UTF-8: {file_path}. Skipping")
-                progress_bar.update(1)
-    progress_bar.close()
-    return collection
-
-
-def retrieve_documents(kw_extractor, config, messages, collection, question):
-    docs = {}
-
-    initial_results = collection.query(
-        query_texts=[question],
-    )
-    for doc, meta, distance in zip(
-        initial_results["documents"][0],
-        initial_results["metadatas"][0],
-        initial_results["distances"][0],
-    ):
-        docs[meta["path"]] = {"document": doc, "distance": distance}
-
-    logger.debug(
-        f"Query documents: {[meta['path'] for meta in initial_results['metadatas'][0]]}"
-    )
-
-    search_keywords = extract_keywords(kw_extractor, question)
-    logger.debug(f"Keywords: {search_keywords}")
-    if search_keywords and len(search_keywords) > 0:
-        if len(search_keywords) > 1:
-            where_document = {
-                "$or": [{"$contains": keyword} for keyword in search_keywords]
-            }
-        else:
-            where_document = {"$contains": search_keywords[0]}
-        keyword_results = collection.query(
-            query_texts=[question],
-            where_document=where_document,
-        )
-        for doc, meta, distance in zip(
-            keyword_results["documents"][0],
-            keyword_results["metadatas"][0],
-            keyword_results["distances"][0],
-        ):
-            if meta["path"] not in docs:
-                docs[meta["path"]] = {"document": doc, "distance": distance}
-        logger.debug(
-            f"Keyword documents: {[meta['path'] for meta in keyword_results['metadatas'][0]]}"
-        )
-
-    # Sort by distance, take the top N then reverse so that more relevant documents are later in the prompt
-    question_docs = list(
-        reversed(
-            [d["document"] for d in sorted(docs.values(), key=lambda d: d["distance"])][
-                : config.num_docs
-            ]
-        )
-    )
-
-    if len(messages) > 1:
-        conversation_history = " ".join(msg["content"] for msg in messages)
-        additional_results = collection.query(
-            query_texts=[conversation_history],
-            n_results=config.num_context_docs,
-        )
-        context_docs = []
-        for doc, meta in zip(
-            additional_results["documents"][0], additional_results["metadatas"][0]
-        ):
-            if meta["path"] not in docs:
-                context_docs.append(doc)
-
-        logger.debug(
-            f"Context documents: {[meta['path'] for meta in additional_results['metadatas'][0]]}"
-        )
-    else:
-        context_docs = []
-
-    return context_docs + question_docs
-
-
-def query_codebase(openai_client, config, messages, question, documents):
-    context_documents = "\n\n".join(
-        [textwrap.shorten(doc, width=config.doc_max_length) for doc in documents]
-    )
-
-    messages.append(
-        {
-            "role": "user",
-            "content": f"Answer the following question about the provided source documents, ignoring any documents that don't seem relevant: {question}",
-        }
-    )
-    response_text = ""
-    response = openai_client.chat.completions.create(
-        model=config.openai_model,
-        messages=[
-            {
-                "role": "system",
-                "content": f"You are an expert in understanding and explaining code. You will be asked a question about a codebase, respond concisely.",
-            },
-            {"role": "user", "content": f"Relevant source files: {context_documents}"},
-        ]
-        + messages,
-        stream=True,
-    )
-
-    for chunk in response:
-        if len(chunk.choices) > 0:
-            text = chunk.choices[0].delta.content or ""
-            response_text += text
-            yield text
-    messages.append({"role": "assistant", "content": response_text})
+                try:
+                    doc = TextLoader(
+                        file_path=os.path.join(root, file), autodetect_encoding=True
+                    ).load()
+                    for chunk in split_docs(doc):
+                        yield chunk
+                except Exception as e:
+                    print(f"Error loading {os.path.join(root, file)}: {e}")
 
 
 def main():
+    console = Console()
+
     parser = argparse.ArgumentParser(
         description="Interactively explore a codebase with an LLM."
     )
     parser.add_argument("directory", help="The directory to index and explore.")
     parser.add_argument(
-        "--skip-index",
-        action="store_true",
-        help="skip indexing the directory (warning: if the directory hasn't been indexed at least once, it will be indexed anyway)",
+        "-l",
+        "--llm",
+        help="The LLM backend, one of openai, ollama, or azure. Default: openai. If using Azure, make sure to set the AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION environment variables.",
+        default="openai",
     )
     parser.add_argument(
-        "--reindex", action="store_true", help="Reindex the whole directory"
+        "-m",
+        "--model",
+        help=f"The LLM model to use. Default: {DEFAULT_OPENAI_MODEL} for openai, {DEFAULT_OLLAMA_MODEL} for ollama, or {DEFAULT_AZURE_MODEL} for azure.",
     )
-    parser.add_argument(
-        "--no-ignore", action="store_true", help="Disable respecting .gitignore files"
-    )
-    parser.add_argument(
-        "--documents-only",
-        action="store_true",
-        help="Only print documents, then exit. --question must be provided",
-    )
-    parser.add_argument(
-        "--question", help="Initial question to ask (will prompt if not provided)"
-    )
-    parser.add_argument(
-        "--no-progress-bar", help="Disable progress bar", action="store_true"
-    )
-    parser.add_argument(
-        "--index-only", help="Only index the directory", action="store_true"
-    )
-    parser.add_argument(
-        "--config",
-        help="Path to the config file",
-        default=os.path.join(os.getenv("HOME"), ".explore", "config.toml"),
-    )
+
     args = parser.parse_args()
 
+    explore_dir = os.path.join(os.getenv("HOME"), ".explore")
+    os.makedirs(explore_dir, exist_ok=True)
+
+    if args.llm == "openai":
+        model = args.model or DEFAULT_OPENAI_MODEL
+        llm = ChatOpenAI(model=model)
+    elif args.llm == "ollama":
+        model = args.model or DEFAULT_OLLAMA_MODEL
+        llm = ChatOllama(model=model, num_ctx=4096)
+    elif args.llm == "azure":
+        credential = DefaultAzureCredential()
+        os.environ["OPENAI_API_TYPE"] = "azure_ad"
+        os.environ["OPENAI_API_KEY"] = credential.get_token(
+            "https://cognitiveservices.azure.com/.default"
+        ).token
+        model = args.model or DEFAULT_AZURE_MODEL
+        llm = AzureChatOpenAI(azure_deployment=model)
+    else:
+        console.print(f"Invalid LLM backend: {args.llm}")
+        exit(1)
+
     directory = os.path.abspath(os.path.expanduser(args.directory))
-    ignore_gitignore = not args.no_ignore
-    documents_only = args.documents_only
-    initial_question = args.question
-    no_progress_bar = args.no_progress_bar
-    index_only = args.index_only
-    reindex = args.reindex
-    config_path = args.config
+    collection = collection_name(directory)
 
-    if documents_only and not initial_question:
-        parser.error("--question is required when using --documents-only")
-
-    messages = []
-    config = Config.load(config_path)
-    logger.debug(f"Config: {config}")
-    os.makedirs(config.db_path, exist_ok=True)
-    openai_client = OpenAI(
-        api_key=config.openai_api_key, base_url=config.openai_base_url
-    )
-    kw_extractor = KeyLLM(
-        KeyBERTOpenAI(model=config.openai_model, client=openai_client, chat=True)
-    )
-    client = chromadb.PersistentClient(
-        path=config.db_path, settings=Settings(anonymized_telemetry=False)
-    )
-    embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-mpnet-base-v2"
-    )
-
-    try:
-        if args.skip_index:
-            name = collection_name(directory)
-            try:
-                collection = client.get_collection(name=name)
-            except ValueError:
-                print(
-                    f"Warning: No existing collection for {directory}. Indexing is required."
-                )
-                collection = index_directory(
-                    client,
-                    embedding_function,
-                    directory,
-                    ignore_gitignore,
-                    disable_progress_bar=no_progress_bar,
-                )
-        else:
-            collection = index_directory(
-                client,
-                embedding_function,
-                directory,
-                ignore_gitignore,
-                disable_progress_bar=no_progress_bar,
-                reindex=reindex,
-            )
-
-        if index_only:
-            return
-
-        if not os.path.exists(config.history_file):
-            os.makedirs(os.path.dirname(config.history_file), exist_ok=True)
-            with open(config.history_file, "wb"):
-                pass  # create the file
-        readline.read_history_file(config.history_file)
-        looped = False
-        while True:
-            if initial_question and not looped:
-                question = initial_question
-            else:
-                question = input(
-                    "Ask a question about the codebase (or type 'exit' to quit): "
-                )
-            looped = True
-            if question.lower() == "exit":
-                break
-
-            print("", flush=True)
-            documents = retrieve_documents(
-                kw_extractor, config, messages, collection, question
-            )
-            if documents_only:
-                for doc in documents:
-                    print(doc)
-                break
-            for part in query_codebase(
-                openai_client, config, messages, question, documents
-            ):
-                print(part, end="", flush=True)
-            print()  # For a new line after the full response
-            readline.write_history_file(config.history_file)
-    except KeyboardInterrupt:
+    history_file = os.path.join(explore_dir, f"history-{collection}")
+    with open(history_file, "a"):
         pass
+
+    record_manager_namespace = f"/chroma/{collection}"
+    record_manager_cache_db = os.path.join(explore_dir, "record_manager_cache.db")
+    record_manager = SQLRecordManager(
+        namespace=record_manager_namespace,
+        db_url=f"sqlite:///{record_manager_cache_db}",
+    )
+    record_manager.create_schema()
+
+    readline.read_history_file(history_file)
+
+    embedding_model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2"
+    )
+    vector_store = Chroma(
+        collection_name=collection,
+        embedding_function=embedding_model,
+        persist_directory=os.path.join(explore_dir, "db-langchain"),
+    )
+
+    docs = collect_documents(directory)
+    with console.status("Indexing codebase..."):
+        index(
+            docs_source=docs,
+            record_manager=record_manager,
+            vector_store=vector_store,
+            cleanup="full",
+            source_id_key="source",
+        )
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are an assistant who answers questions about a codebase. Use the following pieces of retrieved context from the codebase to answer the question. If you don't know the answer, just say that you don't know. Keep your answers concise and to the point. Make sure to mention the specific files and code from the context that you are referring to in your answers.\n\n{context}",
+            ),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    vector_retriever = vector_store.as_retriever(
+        search_kwargs={"k": VECTOR_STORE_TOP_K}
+    )
+    # potential improvement here: use ParentDocumentRetriever to retrieve full or larger-chunk docs given smaller child chunks that are indexed
+    # https://python.langchain.com/docs/how_to/parent_document_retriever/
+    # Other interesting strategies here: https://python.langchain.com/docs/how_to/multi_vector/
+    multi_query_retriever = MultiQueryRetriever.from_llm(
+        retriever=vector_retriever, llm=llm
+    )
+    # https://python.langchain.com/docs/tutorials/qa_chat_history/
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question "
+        "which might reference context in the chat history, "
+        "formulate a standalone question which can be understood "
+        "without the chat history. Do NOT answer the question, "
+        "just reformulate it if needed and otherwise return it as is."
+    )
+
+    contextualize_q_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    history_aware_retriever = create_history_aware_retriever(
+        llm, multi_query_retriever, contextualize_q_prompt
+    )
+    qa_chain = create_stuff_documents_chain(
+        llm=llm,
+        prompt=prompt,
+        document_prompt=PromptTemplate.from_template("{source}:\n{page_content}"),
+    )
+    retrieval_chain = create_retrieval_chain(
+        retriever=history_aware_retriever, combine_docs_chain=qa_chain
+    )
+
+    chat_history = []
+
+    while True:
+        question = input("\u001b[1mAsk a question about the codebase ('exit' to quit):\u001b[0m ")
+        if question == "exit":
+            break
+        readline.write_history_file(history_file)
+
+        # The rich library can't parse streaming Markdown, so we can't stream if we want Markdown rendering
+        with console.status("Thinking..."):
+            response = retrieval_chain.invoke(
+                {"input": question, "chat_history": chat_history}
+            )
+        chat_history.extend(
+            [HumanMessage(content=question), AIMessage(content=response["answer"])]
+        )
+        md = Markdown(response["answer"])
+        console.print()
+        console.print(md)
+        console.print()
 
 
 if __name__ == "__main__":
     main()
-
-# TODO:
-# - integrate with Emacs
