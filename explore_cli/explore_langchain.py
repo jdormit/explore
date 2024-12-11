@@ -311,7 +311,7 @@ def main():
     chat_history = []
 
     while True:
-        question = input("Ask a question about the codebase ('exit' to quit): ")
+        question = input("\u001b[1mAsk a question about the codebase ('exit' to quit):\u001b[0m ")
         if question == "exit":
             break
         readline.write_history_file(history_file)
@@ -327,6 +327,7 @@ def main():
         md = Markdown(response["answer"])
         console.print()
         console.print(md)
+        console.print()
 
 
 if __name__ == "__main__":
