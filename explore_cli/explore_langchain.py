@@ -1,3 +1,4 @@
+from azure.identity import DefaultAzureCredential
 import argparse
 from fnmatch import fnmatch
 import gnureadline as readline
@@ -18,7 +19,7 @@ from langchain_core.prompts import (
     PromptTemplate,
 )
 from langchain_ollama import ChatOllama
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathspec import GitIgnoreSpec
 from rich.console import Console
@@ -99,6 +100,7 @@ LANGUAGES_BY_EXTENSION = {
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_MODEL = "mistral-nemo:latest"
+DEFAULT_AZURE_MODEL = "gpt-4o"
 
 VECTOR_STORE_TOP_K = 5
 
@@ -191,13 +193,13 @@ def main():
     parser.add_argument(
         "-l",
         "--llm",
-        help="The LLM backend, one of openai or ollama. Default: openai",
+        help="The LLM backend, one of openai, ollama, or azure. Default: openai. If using Azure, make sure to set the AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION environment variables.",
         default="openai",
     )
     parser.add_argument(
         "-m",
         "--model",
-        help=f"The LLM model to use. Default: {DEFAULT_OPENAI_MODEL} for openai or {DEFAULT_OLLAMA_MODEL} for ollama",
+        help=f"The LLM model to use. Default: {DEFAULT_OPENAI_MODEL} for openai, {DEFAULT_OLLAMA_MODEL} for ollama, or {DEFAULT_AZURE_MODEL} for azure.",
     )
 
     args = parser.parse_args()
@@ -211,6 +213,14 @@ def main():
     elif args.llm == "ollama":
         model = args.model or DEFAULT_OLLAMA_MODEL
         llm = ChatOllama(model=model, num_ctx=4096)
+    elif args.llm == "azure":
+        credential = DefaultAzureCredential()
+        os.environ["OPENAI_API_TYPE"] = "azure_ad"
+        os.environ["OPENAI_API_KEY"] = credential.get_token(
+            "https://cognitiveservices.azure.com/.default"
+        ).token
+        model = args.model or DEFAULT_AZURE_MODEL
+        llm = AzureChatOpenAI(azure_deployment=model)
     else:
         console.print(f"Invalid LLM backend: {args.llm}")
         exit(1)
