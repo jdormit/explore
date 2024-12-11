@@ -37,9 +37,11 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  -l LLM, --llm LLM     The LLM backend, one of openai or ollama. Default: openai
+  -l LLM, --llm LLM     The LLM backend, one of openai, ollama, or azure. Default: openai. If using Azure, make sure to
+                        set the AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION environment variables.
   -m MODEL, --model MODEL
-                        The LLM model to use. Default: gpt-4o-mini for openai or mistral-nemo:latest for ollama
+                        The LLM model to use. Default: gpt-4o-mini for openai, mistral-nemo:latest for ollama, or
+                        gpt-4o for azure.
 ```
 
 ## How it works
@@ -49,3 +51,17 @@ options:
    - A multi-query retriever issues multiple variations of the query to increase the diversity and relevance of retrieved documents.
    - Additionally, a history-aware retriever reformulates the user query, considering the conversation history to better capture context.
 3. Retrieved documents are deduplicated, concatenated, and added as context to the LLM, which generates an answer to the user's question. Answers include specific references to the files and code pertinent to the query.
+
+## Using Azure OpenAI
+`explore` can connect to an Azure OpenAI instance using Azure Active Directory authentication. First, set the relevant environment variables (you can find the values to use for these in the Azure portal):
+
+``` sh
+export AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com # <- endpoint for the Azure OpenAI instance
+export OPENAI_API_VERSION=2024-10-01-preview # <- API version for the deployment you want to use
+```
+
+When you invoke `explore`, pass the Azure OpenAI deployment name as the `--model` argument and specify `azure` as the `--llm`:
+
+``` sh
+$ explore --llm azure --model gpt-4o /some/directory
+```
