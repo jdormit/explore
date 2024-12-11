@@ -60,8 +60,14 @@ export AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com # <- en
 export OPENAI_API_VERSION=2024-10-01-preview # <- API version for the deployment you want to use
 ```
 
+Make sure you are authenticated via the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/):
+
+``` sh
+az login
+```
+
 When you invoke `explore`, pass the Azure OpenAI deployment name as the `--model` argument and specify `azure` as the `--llm`:
 
 ``` sh
-$ explore --llm azure --model gpt-4o /some/directory
+explore --llm azure --model gpt-4o /some/directory
 ```
