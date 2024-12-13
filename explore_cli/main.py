@@ -2,6 +2,7 @@ from azure.identity import DefaultAzureCredential
 import argparse
 from fnmatch import fnmatch
 import gnureadline as readline
+import hashlib
 import os
 from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
@@ -19,7 +20,12 @@ from langchain_core.prompts import (
     PromptTemplate,
 )
 from langchain_ollama import ChatOllama
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_openai import (
+    AzureChatOpenAI,
+    ChatOpenAI,
+    OpenAIEmbeddings,
+    AzureOpenAIEmbeddings,
+)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pathspec import GitIgnoreSpec
 from rich.console import Console
@@ -98,15 +104,24 @@ LANGUAGES_BY_EXTENSION = {
     "hs": Language.HASKELL,
 }
 
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-DEFAULT_OLLAMA_MODEL = "mistral-nemo:latest"
-DEFAULT_AZURE_MODEL = "gpt-4o"
+DEFAULT_LLM_MODELS = {
+    "openai": "gpt-4o-mini",
+    "ollama": "mistral-nemo:latest",
+    "azure": "gpt-4o",
+}
+
+DEFAULT_EMBEDDINGS_MODELS = {
+    "huggingface": "sentence-transformers/all-mpnet-base-v2",
+    "openai": "text-embedding-3-small",
+    "azure": "text-embedding-large",
+}
 
 VECTOR_STORE_TOP_K = 5
 
 
-def collection_name(directory):
-    return directory.replace("/", "_").strip("_")
+def collection_name(directory, embeddings_backend, embeddings_model):
+    base_name = f"{directory}_{embeddings_backend}_{embeddings_model}"
+    return hashlib.blake2b(base_name.encode("utf-8"), digest_size=31).hexdigest()
 
 
 def load_gitignore(directory):
@@ -194,12 +209,24 @@ def main():
         "-l",
         "--llm",
         help="The LLM backend, one of openai, ollama, or azure. Default: openai. If using Azure, make sure to set the AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION environment variables.",
+        choices=["openai", "ollama", "azure"],
         default="openai",
     )
     parser.add_argument(
         "-m",
         "--model",
-        help=f"The LLM model to use. Default: {DEFAULT_OPENAI_MODEL} for openai, {DEFAULT_OLLAMA_MODEL} for ollama, or {DEFAULT_AZURE_MODEL} for azure.",
+        help=f"The LLM model to use. Default: {', '.join([model + ' for ' + backend for backend, model in DEFAULT_LLM_MODELS.items()])}.",
+    )
+    parser.add_argument(
+        "-e",
+        "--embeddings",
+        help="The embedding backend, one of huggingface, openai, or azure. Default: huggingface",
+        choices=["huggingface", "openai", "azure"],
+        default="huggingface",
+    )
+    parser.add_argument(
+        "--embeddings-model",
+        help=f"The embeddings model to use. Default: {', '.join([model + ' for ' + backend for backend, model in DEFAULT_EMBEDDINGS_MODELS.items()])}",
     )
 
     args = parser.parse_args()
@@ -207,11 +234,14 @@ def main():
     explore_dir = os.path.join(os.getenv("HOME"), ".explore")
     os.makedirs(explore_dir, exist_ok=True)
 
+    model = args.model or DEFAULT_LLM_MODELS[args.llm]
+    embeddings_model_name = (
+        args.embeddings_model or DEFAULT_EMBEDDINGS_MODELS[args.embeddings]
+    )
+
     if args.llm == "openai":
-        model = args.model or DEFAULT_OPENAI_MODEL
         llm = ChatOpenAI(model=model)
     elif args.llm == "ollama":
-        model = args.model or DEFAULT_OLLAMA_MODEL
         llm = ChatOllama(model=model, num_ctx=4096)
     elif args.llm == "azure":
         credential = DefaultAzureCredential()
@@ -219,14 +249,13 @@ def main():
         os.environ["OPENAI_API_KEY"] = credential.get_token(
             "https://cognitiveservices.azure.com/.default"
         ).token
-        model = args.model or DEFAULT_AZURE_MODEL
         llm = AzureChatOpenAI(azure_deployment=model)
     else:
         console.print(f"Invalid LLM backend: {args.llm}")
         exit(1)
 
     directory = os.path.abspath(os.path.expanduser(args.directory))
-    collection = collection_name(directory)
+    collection = collection_name(directory, args.embeddings, embeddings_model_name)
 
     history_file = os.path.join(explore_dir, f"history-{collection}")
     with open(history_file, "a"):
@@ -242,12 +271,21 @@ def main():
 
     readline.read_history_file(history_file)
 
-    embedding_model = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-mpnet-base-v2"
-    )
+    if args.embeddings == "huggingface":
+        embeddings_model = HuggingFaceEmbeddings(model_name=embeddings_model_name)
+    elif args.embeddings == "openai":
+        embeddings_model = OpenAIEmbeddings(model=embeddings_model_name)
+    elif args.embeddings == "azure":
+        credential = DefaultAzureCredential()
+        os.environ["OPENAI_API_TYPE"] = "azure_ad"
+        os.environ["OPENAI_API_KEY"] = credential.get_token(
+            "https://cognitiveservices.azure.com/.default"
+        ).token
+        embeddings_model = AzureOpenAIEmbeddings(model=embeddings_model_name)
+
     vector_store = Chroma(
         collection_name=collection,
-        embedding_function=embedding_model,
+        embedding_function=embeddings_model,
         persist_directory=os.path.join(explore_dir, "db-langchain"),
     )
 
@@ -311,7 +349,9 @@ def main():
     chat_history = []
 
     while True:
-        question = input("\u001b[1mAsk a question about the codebase ('exit' to quit):\u001b[0m ")
+        question = input(
+            "\u001b[1mAsk a question about the codebase ('exit' to quit):\u001b[0m "
+        )
         if question == "exit":
             break
         readline.write_history_file(history_file)
