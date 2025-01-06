@@ -17,7 +17,6 @@ dependencies = [
     "langchain-text-splitters>=0.3.4",
     "pathspec>=0.12.1",
     "rich>=13.9.4",
-    "sqlite-vec>=0.1.6",
 ]
 
 [project.scripts]
