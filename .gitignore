@@ -1,3 +1,4 @@
 /.envrc
 /dist/
 *.pyc
+/explore_cli.egg-info/
